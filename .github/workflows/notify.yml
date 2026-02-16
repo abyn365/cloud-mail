@@ -1,0 +1,12 @@
+name: Notify Telegram
+
+on:
+  workflow_run:
+    workflows: ["Deploy", "Build", "CI"]
+    types: [completed]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Triggered"
