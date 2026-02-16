@@ -132,6 +132,7 @@ const en = {
     hasAccount: 'Already have an account? \u200B',
     regSwitch: 'Sign up',
     loginSwitch: 'Sign in',
+    needAccess: 'Need access? Contact admin@abyn.xyz or Telegram @byybtw to obtain an account or invite code.',
     websiteSetting: 'Website',
     websiteReg: 'Sign Up',
     loginDomain: 'Sign-In Box Domain',

@@ -13,6 +13,13 @@
         <span class="form-title">{{ settingStore.settings.title }}</span>
         <span class="form-desc" v-if="show === 'login'">{{ $t('loginTitle') }}</span>
         <span class="form-desc" v-else>{{ $t('regTitle') }}</span>
+        
+        <!-- Access Info Message -->
+        <div class="access-info">
+          <Icon icon="mdi:information-outline" width="16" height="16" />
+          <span>{{ $t('needAccess') }}</span>
+        </div>
+        
         <div v-show="show === 'login'">
           <el-input :class="settingStore.settings.loginDomain === 0 ? 'email-input' : ''" v-model="form.email"
                     type="text" :placeholder="$t('emailAccount')" autocomplete="off">
@@ -616,6 +623,24 @@ function submitRegister() {
   .form-title {
     font-weight: bold;
     font-size: 22px !important;
+  }
+
+  .access-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    margin-bottom: 15px;
+    background: var(--el-color-info-light-9);
+    border: 1px solid var(--el-color-info-light-7);
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--el-color-info);
+    line-height: 1.4;
+    
+    @media (max-width: 767px) {
+      font-size: 12px;
+    }
   }
 
   .switch {
