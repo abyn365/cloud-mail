@@ -15,20 +15,22 @@ on:
 jobs:
   notify:
     runs-on: ubuntu-latest
-    steps:
 
+    steps:
       - name: Manual trigger notification
         if: github.event_name == 'workflow_dispatch'
         run: |
-          MESSAGE="🧪 Manual workflow trigger
+          MESSAGE="Manual workflow trigger
 
 Repo: ${{ github.repository }}
 Actor: ${{ github.actor }}
 Message: ${{ github.event.inputs.message }}"
 
+          printf '{"chat_id":"%s","text":"%s"}' "${{ secrets.CHAT_ID }}" "$MESSAGE" > payload.json
+
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "{\"chat_id\":\"${{ secrets.CHAT_ID }}\",\"text\":\"$MESSAGE\"}"
+            -d @payload.json
 
       - name: Deployment result notification
         if: github.event_name == 'workflow_run'
@@ -38,7 +40,7 @@ Message: ${{ github.event.inputs.message }}"
           BRANCH="${{ github.event.workflow_run.head_branch }}"
           URL="${{ github.event.workflow_run.html_url }}"
 
-          MESSAGE="🤖 Deployment result
+          MESSAGE="Deployment result
 
 Workflow: $WORKFLOW
 Branch: $BRANCH
@@ -46,6 +48,8 @@ Status: $STATUS
 
 $URL"
 
+          printf '{"chat_id":"%s","text":"%s"}' "${{ secrets.CHAT_ID }}" "$MESSAGE" > payload.json
+
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "{\"chat_id\":\"${{ secrets.CHAT_ID }}\",\"text\":\"$MESSAGE\"}"
+            -d @payload.json
