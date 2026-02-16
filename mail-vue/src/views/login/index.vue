@@ -17,7 +17,7 @@
         <!-- Access Info Message -->
         <div class="access-info">
           <Icon icon="mdi:information-outline" width="16" height="16" />
-          <span>{{ $t('needAccess') }}</span>
+          <span v-html="$t('needAccess')"></span>
         </div>
         
         <div v-show="show === 'login'">
