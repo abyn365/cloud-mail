@@ -13,7 +13,7 @@
         <span class="form-title">{{ settingStore.settings.title }}</span>
         <span class="form-desc" v-if="show === 'login'">{{ $t('loginTitle') }}</span>
         <span class="form-desc" v-else>{{ $t('regTitle') }}</span>
-        <p class="form-need-access" v-if="needAccessText">{{ needAccessText }}</p>
+        <span class="form-desc">{{ $t('needAccessInfo') }}</span>
         <div v-show="show === 'login'">
           <el-input :class="settingStore.settings.loginDomain === 0 ? 'email-input' : ''" v-model="form.email"
                     type="text" :placeholder="$t('emailAccount')" autocomplete="off">
@@ -242,10 +242,6 @@ const background = computed(() => {
     'background-size': 'cover',
     'background-position': 'center'
   } : ''
-})
-
-const needAccessText = computed(() => {
-  return t('needAccessInfo')
 })
 
 const openSelect = () => {
