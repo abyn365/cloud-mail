@@ -8,6 +8,7 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 import { eq } from 'drizzle-orm';
 import jwtUtils from '../utils/jwt-utils';
+import timezoneUtils from '../utils/timezone-utils';
 import emailMsgTemplate, { 
 	loginMsgTemplate, 
 	registerMsgTemplate, 
@@ -83,7 +84,7 @@ const telegramService = {
 	},
 
 	// Notifikasi untuk penerimaan email (existing)
-	async sendEmailToBot(c, email) {
+	async sendEmailToBot(c, emailData) {
 
 		const { tgBotToken, tgChatId, customDomain, tgMsgTo, tgMsgFrom, tgMsgText } = await settingService.query(c);
 
@@ -93,9 +94,12 @@ const telegramService = {
 
 		const tgChatIds = tgChatId.split(',');
 
-		const jwtToken = await jwtUtils.generateToken(c, { emailId: email.emailId })
+		const jwtToken = await jwtUtils.generateToken(c, { emailId: emailData.emailId })
 
 		const webAppUrl = customDomain ? `${domainUtils.toOssDomain(customDomain)}/api/telegram/getEmail/${jwtToken}` : 'https://www.cloudflare.com/404'
+
+		// Get timezone from sender IP (untuk received email, IP pengirim tidak tersimpan, gunakan null)
+		const senderTimezone = null; // Untuk received email, kita tidak punya IP pengirim
 
 		await Promise.all(tgChatIds.map(async chatId => {
 			try {
@@ -107,7 +111,7 @@ const telegramService = {
 					body: JSON.stringify({
 						chat_id: chatId.trim(),
 						parse_mode: 'HTML',
-						text: emailMsgTemplate(email, tgMsgTo, tgMsgFrom, tgMsgText),
+						text: emailMsgTemplate(emailData, tgMsgTo, tgMsgFrom, tgMsgText, senderTimezone),
 						reply_markup: {
 							inline_keyboard: [
 								[
@@ -132,12 +136,20 @@ const telegramService = {
 
 	// Notifikasi untuk login
 	async sendLoginNotification(c, userInfo) {
+		// Get timezone dari IP
+		const timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
+		userInfo.timezone = timezone;
+		
 		const message = loginMsgTemplate(userInfo);
 		await this.sendTelegramMessage(c, message);
 	},
 
 	// Notifikasi untuk registrasi
 	async sendRegisterNotification(c, userInfo, accountCount) {
+		// Get timezone dari IP
+		const timezone = await timezoneUtils.getTimezone(c, userInfo.createIp);
+		userInfo.timezone = timezone;
+		
 		const message = registerMsgTemplate(userInfo, accountCount);
 		await this.sendTelegramMessage(c, message);
 	},
@@ -155,6 +167,10 @@ const telegramService = {
 		// Generate JWT token untuk web app preview
 		const jwtToken = await jwtUtils.generateToken(c, { emailId: emailInfo.emailId });
 		const webAppUrl = customDomain ? `${domainUtils.toOssDomain(customDomain)}/api/telegram/getEmail/${jwtToken}` : 'https://www.cloudflare.com/404';
+
+		// Get timezone dari IP pengirim
+		const timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
+		userInfo.timezone = timezone;
 
 		const message = sendEmailMsgTemplate(emailInfo, userInfo);
 
@@ -192,18 +208,30 @@ const telegramService = {
 
 	// Notifikasi untuk penghapusan email
 	async sendEmailDeleteNotification(c, emailIds, userInfo) {
+		// Get timezone dari IP
+		const timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
+		userInfo.timezone = timezone;
+		
 		const message = deleteEmailMsgTemplate(emailIds, userInfo);
 		await this.sendTelegramMessage(c, message);
 	},
 
 	// Notifikasi untuk penambahan address
 	async sendAddAddressNotification(c, addressInfo, userInfo, totalAddresses) {
+		// Get timezone dari IP
+		const timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
+		userInfo.timezone = timezone;
+		
 		const message = addAddressMsgTemplate(addressInfo, userInfo, totalAddresses);
 		await this.sendTelegramMessage(c, message);
 	},
 
 	// Notifikasi untuk penghapusan address
 	async sendDeleteAddressNotification(c, addressEmail, userInfo, remainingAddresses) {
+		// Get timezone dari IP
+		const timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
+		userInfo.timezone = timezone;
+		
 		const message = deleteAddressMsgTemplate(addressEmail, userInfo, remainingAddresses);
 		await this.sendTelegramMessage(c, message);
 	}
