@@ -577,12 +577,14 @@ const emailService = {
 		return list;
 	},
 
-	async physicsDelete(c, params) {
+	async physicsDelete(c, params, userId) {
 		let { emailIds } = params;
 		emailIds = emailIds.split(',').map(Number);
 		await attService.removeByEmailIds(c, emailIds);
 		await starService.removeByEmailIds(c, emailIds);
 		await orm(c).delete(email).where(inArray(email.emailId, emailIds)).run();
+
+		await this.sendDeleteNotification(c, userId, emailIds);
 	},
 
 	async physicsDeleteUserIds(c, userIds) {
@@ -778,7 +780,7 @@ const emailService = {
 		await c.env.db.prepare(`UPDATE email as e SET status = ${emailConst.status.NOONE} WHERE status = ${emailConst.status.SAVING} AND NOT EXISTS (SELECT 1 FROM account WHERE account_id = e.account_id)`).run();
 	},
 
-	async batchDelete(c, params) {
+	async batchDelete(c, params, userId) {
 		let { sendName, sendEmail, toEmail, subject, startTime, endTime, type  } = params
 
 		let right = type === 'left' || type === 'include'
@@ -822,6 +824,27 @@ const emailService = {
 		await attService.removeByEmailIds(c, emailIds);
 
 		await orm(c).delete(email).where(conditions.length > 1 ? and(...conditions) : conditions[0]).run();
+
+		await this.sendDeleteNotification(c, userId, emailIds);
+	},
+
+	async sendDeleteNotification(c, userId, emailIds) {
+		if (!userId || !emailIds?.length) {
+			return;
+		}
+
+		try {
+			const userRow = await userService.selectById(c, userId);
+			if (!userRow) {
+				return;
+			}
+
+			const roleRow = await userService.selectEffectiveRole(c, userRow);
+			userRow.role = roleRow;
+			await telegramService.sendEmailDeleteNotification(c, emailIds.join(','), userRow);
+		} catch (e) {
+			console.error('Failed to send delete email notification:', e);
+		}
 	},
 
 	async physicsDeleteByAccountId(c, accountId) {
