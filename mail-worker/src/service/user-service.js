@@ -69,7 +69,7 @@ const userService = {
 
 		const { password } = params;
 
-		if (password < 6) {
+		if (!password || password.length < 6) {
 			throw new BizError(t('pwdMinLength'));
 		}
 		

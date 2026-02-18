@@ -91,15 +91,13 @@ app.use('*', async (c, next) => {
 
 	const path = c.req.path;
 
-	const index = exclude.findIndex(item => {
-		return path.startsWith(item);
-	});
+	const index = exclude.findIndex(item => isRouteMatch(path, item));
 
 	if (index > -1) {
 		return await next();
 	}
 
-	if (path.startsWith('/public')) {
+	if (isRouteMatch(path, '/public')) {
 
 		const userPublicToken = await c.env.kv.get(KvConst.PUBLIC_KEY);
 		const publicToken = c.req.header(constant.TOKEN_HEADER);
@@ -129,9 +127,7 @@ app.use('*', async (c, next) => {
 		throw new BizError(t('authExpired'), 401);
 	}
 
-	const permIndex = requirePerms.findIndex(item => {
-		return path.startsWith(item);
-	});
+	const permIndex = requirePerms.findIndex(item => isRouteMatch(path, item));
 
 	if (permIndex > -1) {
 
@@ -139,9 +135,7 @@ app.use('*', async (c, next) => {
 
 		const userPaths = permKeyToPaths(permKeys);
 
-		const userPermIndex = userPaths.findIndex(item => {
-			return path.startsWith(item);
-		});
+		const userPermIndex = userPaths.findIndex(item => isRouteMatch(path, item));
 
 		if (userPermIndex === -1 && authInfo.user.email !== c.env.admin) {
 			throw new BizError(t('unauthorized'), 403);
@@ -174,4 +168,8 @@ function permKeyToPaths(permKeys) {
 		}
 	}
 	return paths;
+}
+
+function isRouteMatch(path, prefix) {
+	return path === prefix || path.startsWith(prefix + '/');
 }
