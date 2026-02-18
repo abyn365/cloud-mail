@@ -187,7 +187,8 @@ const telegramService = {
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		const message = loginMsgTemplate(userInfo);
-		await this.sendTelegramMessage(c, message);
+		const url = customDomain ? `${domainUtils.toOssDomain(customDomain)}/#/user` : 'https://www.cloudflare.com/404';
+		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url } }]] });
 	},
 
 	async sendRegisterNotification(c, userInfo, accountCount, roleInfo = null) {
