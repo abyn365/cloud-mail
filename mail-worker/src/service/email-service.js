@@ -832,27 +832,6 @@ const emailService = {
 	async read(c, params, userId) {
 		const { emailIds } = params;
 		await orm(c).update(email).set({ unread: emailConst.unread.READ }).where(and(eq(email.userId, userId), inArray(email.emailId, emailIds)));
-	},
-
-	async readAll(c, params, userId) {
-		let { accountId, allReceive } = params;
-
-		accountId = Number(accountId);
-		allReceive = Number(allReceive);
-
-		if (isNaN(allReceive)) {
-			const accountRow = await accountService.selectById(c, accountId);
-			allReceive = accountRow.allReceive;
-		}
-
-		await orm(c).update(email).set({ unread: emailConst.unread.READ }).where(
-			and(
-				eq(email.userId, userId),
-				eq(email.type, emailConst.type.RECEIVE),
-				eq(email.isDel, isDel.NORMAL),
-				allReceive ? eq(1, 1) : eq(email.accountId, accountId)
-			)
-		);
 	}
 };
 

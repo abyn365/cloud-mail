@@ -316,7 +316,6 @@ const id = {
     details: 'Detail',
     userDetails: 'Detail Pengguna',
     markAsRead: 'Tandai sebagai Dibaca',
-    markAllAsReadSuccess: 'Semua email berhasil ditandai sebagai dibaca',
     star: 'Bintang',
     setRole: 'Atur Peran',
     adminDeleteUser: 'Hapus Pengguna',
