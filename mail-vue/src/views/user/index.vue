@@ -264,6 +264,10 @@
             userDetails.activeIp || $t('unknown')
           }}
         </div>
+        <div v-if="userDetails.activeIpDetail"><span class="details-item-title">{{ $t('recentIpDetails') }}:</span>{{
+            userDetails.activeIpDetail
+          }}
+        </div>
         <div><span class="details-item-title">{{ $t('recentActivity') }}:</span>{{
             userDetails.activeTime ? tzDayjs(userDetails.activeTime).format('YYYY-MM-DD') : $t('unknown')
           }}

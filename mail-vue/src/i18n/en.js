@@ -65,6 +65,7 @@ const en = {
     restore: 'Restore',
     tabSetting: 'Settings',
     registrationIp: 'Registration IP',
+    recentIpDetails: 'Recent IP Details',
     recentIP: 'Recent IP',
     recentActivity: 'Recent Activity',
     loginDevice: 'Login Device',

@@ -28,8 +28,29 @@ const dbInit = {
 		await this.v2_7DB(c);
 		await this.v2_8DB(c);
 		await this.v2_9DB(c);
+		await this.v3_0DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
+	},
+
+
+	async v3_0DB(c) {
+		try {
+			await c.env.db.batch([
+				c.env.db.prepare(`CREATE TABLE IF NOT EXISTS ip_security_cache (
+					ip TEXT PRIMARY KEY,
+					data TEXT NOT NULL DEFAULT '{}',
+					update_time DATETIME DEFAULT CURRENT_TIMESTAMP
+				)`),
+				c.env.db.prepare(`CREATE TABLE IF NOT EXISTS ip_security_usage (
+					usage_date TEXT PRIMARY KEY,
+					count INTEGER NOT NULL DEFAULT 0,
+					update_time DATETIME DEFAULT CURRENT_TIMESTAMP
+				)`)
+			]);
+		} catch (e) {
+			console.warn(`跳过字段：${e.message}`);
+		}
 	},
 
 	async v2_9DB(c) {
