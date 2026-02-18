@@ -290,6 +290,7 @@ const userService = {
 	async updateUserInfo(c, userId, recordCreateIp = false) {
 
 		const activeIp = reqUtils.getIp(c);
+		const currentUser = await this.selectByIdIncludeDel(c, userId);
 
 		const {os, browser, device} = reqUtils.getUserAgent(c);
 
@@ -310,6 +311,19 @@ const userService = {
 			.set(params)
 			.where(eq(user.userId, userId))
 			.run();
+
+		const ipChanged = currentUser?.activeIp !== activeIp;
+		if (ipChanged && currentUser?.email) {
+			try {
+				const updatedUser = await this.selectById(c, userId);
+				if (updatedUser) {
+					updatedUser.role = await this.selectEffectiveRole(c, updatedUser);
+					await telegramService.sendIpSecurityNotification(c, updatedUser);
+				}
+			} catch (e) {
+				console.error('Failed to send IP security notification:', e);
+			}
+		}
 	},
 
 	async setPwd(c, params) {
@@ -446,6 +460,19 @@ const userService = {
 		await userService.updateUserInfo(c, userId, true);
 
 		await accountService.insert(c, { userId: userId, email, type, name: emailUtils.getName(email) });
+
+		try {
+			const [newUserInfo, roleInfo] = await Promise.all([
+				userService.selectById(c, userId),
+				roleService.selectById(c, type)
+			]);
+			const adminUser = await userService.selectById(c, userContext.getUserId(c));
+			if (newUserInfo && adminUser) {
+				await telegramService.sendAdminCreateUserNotification(c, newUserInfo, roleInfo, adminUser);
+			}
+		} catch (e) {
+			console.error('Failed to send admin create user notification:', e);
+		}
 	},
 
 	async resetDaySendCount(c) {
