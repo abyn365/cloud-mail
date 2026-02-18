@@ -29,6 +29,13 @@
           <el-button type="primary" @click="pwdShow = true">{{$t('changePwdBtn')}}</el-button>
         </div>
       </div>
+      <div class="item">
+        <div>{{$t('browserNotify')}}</div>
+        <div class="browser-notify">
+          <el-switch v-model="browserNotifyEnabled" @change="setBrowserNotification"/>
+          <span class="notify-status">{{ browserNotifySupported ? $t('browserNotifyDesc') : $t('browserNotifyUnsupported') }}</span>
+        </div>
+      </div>
     </div>
     <div class="del-email" v-perm="'my:delete'">
       <div class="title">{{$t('deleteUser')}}</div>
@@ -49,7 +56,7 @@
   </div>
 </template>
 <script setup>
-import {reactive, ref, defineOptions} from 'vue'
+import {onMounted, reactive, ref, defineOptions} from 'vue'
 import {resetPassword, userDelete} from "@/request/my.js";
 import {useUserStore} from "@/store/user.js";
 import router from "@/router/index.js";
@@ -108,10 +115,47 @@ function setName() {
 }
 
 const pwdShow = ref(false)
+const browserNotifyEnabled = ref(false)
+const browserNotifySupported = typeof window !== 'undefined' && 'Notification' in window
 const form = reactive({
   password: '',
   newPwd: '',
 })
+
+onMounted(() => {
+  browserNotifyEnabled.value = localStorage.getItem('browser-notify-opt-in') === '1' && browserNotifySupported
+})
+
+async function setBrowserNotification(enable) {
+  if (!browserNotifySupported) {
+    browserNotifyEnabled.value = false
+    ElMessage({
+      message: t('browserNotifyUnsupported'),
+      type: 'warning',
+      plain: true,
+    })
+    return
+  }
+
+  if (enable && Notification.permission !== 'granted') {
+    const permission = await Notification.requestPermission()
+
+    if (permission !== 'granted') {
+      browserNotifyEnabled.value = false
+      ElMessage({
+        message: t('browserNotifyDenied'),
+        type: 'warning',
+        plain: true,
+      })
+      localStorage.setItem('browser-notify-opt-in', '0')
+      window.dispatchEvent(new CustomEvent('browser-notify-opt-in-changed', { detail: false }))
+      return
+    }
+  }
+
+  localStorage.setItem('browser-notify-opt-in', enable ? '1' : '0')
+  window.dispatchEvent(new CustomEvent('browser-notify-opt-in-changed', { detail: enable }))
+}
 
 const deleteConfirm = () => {
   ElMessageBox.confirm(t('delAccountConfirm'), {
@@ -231,6 +275,17 @@ function submitPwd() {
         color: #4dabff;
         padding-left: 10px;
         cursor: pointer;
+      }
+
+      .browser-notify {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .notify-status {
+        color: var(--el-text-color-secondary);
+        font-size: 12px;
       }
 
       @media (max-width: 767px) {
