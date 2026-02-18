@@ -102,6 +102,9 @@ async function sendBrowserNotification(email) {
     icon: '/mail-pwa.png',
     badge: '/mail-pwa.png',
     tag: `mail-${email.emailId}`,
+    data: {
+      url: '/inbox'
+    }
   }
 
   if ('serviceWorker' in navigator) {
@@ -114,7 +117,11 @@ async function sendBrowserNotification(email) {
     }
   }
 
-  new Notification(title, options)
+  const notification = new Notification(title, options)
+  notification.onclick = () => {
+    window.focus()
+    router.push('/inbox')
+  }
 }
 
 async function latest() {

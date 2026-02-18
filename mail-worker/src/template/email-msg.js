@@ -187,14 +187,31 @@ ${formatDualTime(emailInfo.createTime, userInfo.timezone)}`;
 	return template;
 }
 
-// Template untuk notifikasi penghapusan email
-export function deleteEmailMsgTemplate(emailIds, userInfo) {
+// Template untuk notifikasi soft delete email (user inbox)
+export function softDeleteEmailMsgTemplate(emailIds, userInfo) {
 	const idArray = emailIds.split(',');
 	const count = idArray.length;
-	
-	return `🗑️ <b>Email Deleted</b>
+
+	return `🗑️ <b>Email Soft Deleted</b>
 
 📧 User: <code>${userInfo.email}</code>${formatRoleInfo(userInfo.role)}
+🧩 Delete Type: Soft delete (set <code>is_del=1</code>)
+🔢 Email Count: ${count}
+📋 Email IDs: <code>${emailIds}</code>
+📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
+💻 Device: ${userInfo.device || 'Unknown'} / ${userInfo.os || 'Unknown'}
+${formatDualTime(new Date().toISOString(), userInfo.timezone)}`;
+}
+
+// Template untuk notifikasi hard delete email (all mail / privileged user)
+export function hardDeleteEmailMsgTemplate(emailIds, userInfo) {
+	const idArray = emailIds.split(',');
+	const count = idArray.length;
+
+	return `💥 <b>Email Permanently Deleted</b>
+
+📧 Actor: <code>${userInfo.email}</code>${formatRoleInfo(userInfo.role)}
+🧩 Delete Type: Hard delete (removed from DB)
 🔢 Email Count: ${count}
 📋 Email IDs: <code>${emailIds}</code>
 📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
