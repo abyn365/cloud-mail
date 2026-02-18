@@ -316,6 +316,7 @@ const zh = {
     details: '详情',
     userDetails: '用户详情',
     markAsRead: '标为已读',
+    markAllAsReadSuccess: '已将当前邮件全部标为已读',
     star: '星标',
     setRole: '设置权限',
     adminDeleteUser: '删除用户',
