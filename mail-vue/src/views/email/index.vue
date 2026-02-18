@@ -29,7 +29,7 @@ import {useSettingStore} from "@/store/setting.js";
 import emailScroll from "@/components/email-scroll/index.vue"
 import {emailList, emailDelete, emailLatest, emailRead} from "@/request/email.js";
 import {starAdd, starCancel} from "@/request/star.js";
-import {defineOptions, h, onMounted, reactive, ref, watch} from "vue";
+import {defineOptions, onBeforeUnmount, onMounted, reactive, ref, watch} from "vue";
 import {sleep} from "@/utils/time-utils.js";
 import router from "@/router/index.js";
 import {Icon} from "@iconify/vue";
@@ -50,7 +50,13 @@ const params = reactive({
 
 onMounted(() => {
   emailStore.emailScroll = scroll;
+  syncBrowserNotifyOptIn()
+  window.addEventListener(browserNotifyEvent, onBrowserNotifyChange)
   latest()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener(browserNotifyEvent, onBrowserNotifyChange)
 })
 
 
@@ -73,6 +79,43 @@ function jumpContent(email) {
 }
 
 const existIds = new Set();
+const browserNotifyOptIn = ref(false)
+const browserNotifyEvent = 'browser-notify-opt-in-changed'
+
+function syncBrowserNotifyOptIn() {
+  browserNotifyOptIn.value = localStorage.getItem('browser-notify-opt-in') === '1'
+}
+
+function onBrowserNotifyChange(event) {
+  browserNotifyOptIn.value = Boolean(event.detail)
+}
+
+async function sendBrowserNotification(email) {
+  if (!browserNotifyOptIn.value || !('Notification' in window) || Notification.permission !== 'granted') {
+    return
+  }
+
+  const title = email.subject || 'New email received'
+  const body = `${email.name || email.sendEmail || 'Unknown sender'}`
+  const options = {
+    body,
+    icon: '/mail-pwa.png',
+    badge: '/mail-pwa.png',
+    tag: `mail-${email.emailId}`,
+  }
+
+  if ('serviceWorker' in navigator) {
+    try {
+      const registration = await navigator.serviceWorker.ready
+      await registration.showNotification(title, options)
+      return
+    } catch (e) {
+      console.error('Failed to show notification via service worker:', e)
+    }
+  }
+
+  new Notification(title, options)
+}
 
 async function latest() {
   while (true) {
@@ -111,6 +154,7 @@ async function latest() {
 
                 existIds.add(email.emailId)
                 scroll.value.addItem(email)
+                await sendBrowserNotification(email)
 
                 await sleep(50)
               }
