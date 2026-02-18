@@ -30,7 +30,9 @@ function formatRoleInfo(roleInfo) {
 	let roleText = `\n👤 Role: <b>${roleInfo.name || 'Unknown'}</b>`;
 	
 	// Tambahkan info send limit jika ada
-	if (roleInfo.sendCount !== undefined && roleInfo.sendCount !== null) {
+	if (roleInfo.canSendEmail === false) {
+		roleText += `\n📤 Send Email: Unauthorized`;
+	} else if (roleInfo.sendCount !== undefined && roleInfo.sendCount !== null) {
 		if (roleInfo.sendType === 'day') {
 			roleText += roleInfo.sendCount > 0
 				? `\n📊 Send Limit: ${roleInfo.sendCount} emails/day`
@@ -47,7 +49,9 @@ function formatRoleInfo(roleInfo) {
 	}
 	
 	// Tambahkan info account limit jika ada
-	if (roleInfo.accountCount !== undefined && roleInfo.accountCount !== null) {
+	if (roleInfo.canAddAddress === false) {
+		roleText += `\n📬 Address: Unauthorized`;
+	} else if (roleInfo.accountCount !== undefined && roleInfo.accountCount !== null) {
 		roleText += roleInfo.accountCount > 0
 			? `\n📬 Address Limit: ${roleInfo.accountCount}`
 			: `\n📬 Address Limit: Unlimited`;

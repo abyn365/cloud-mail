@@ -72,6 +72,33 @@ const telegramService = {
 		}));
 	},
 
+
+	async attachRolePermInfo(c, roleInfo) {
+		if (!roleInfo) return roleInfo;
+		if (roleInfo.roleId === undefined || roleInfo.roleId === null) {
+			roleInfo.canSendEmail = true;
+			roleInfo.canAddAddress = true;
+			return roleInfo;
+		}
+
+		try {
+			const { results } = await c.env.db.prepare(`
+				SELECT p.perm_key as permKey
+				FROM role_perm rp
+				LEFT JOIN perm p ON p.perm_id = rp.perm_id
+				WHERE rp.role_id = ?
+			`).bind(roleInfo.roleId).all();
+			const permSet = new Set((results || []).map(item => item.permKey));
+			roleInfo.canSendEmail = permSet.has('email:send');
+			roleInfo.canAddAddress = permSet.has('account:add');
+		} catch (e) {
+			console.error('Failed to load role permission info:', e.message);
+			roleInfo.canSendEmail = roleInfo.canSendEmail ?? true;
+			roleInfo.canAddAddress = roleInfo.canAddAddress ?? true;
+		}
+		return roleInfo;
+	},
+
 	async setIpDetailContext(c, userInfo, ipField = 'activeIp', targetField = 'ipDetail') {
 		const ip = userInfo?.[ipField];
 		if (!ip) return;
@@ -149,6 +176,8 @@ const telegramService = {
 			actorInfo.timezone = await timezoneUtils.getTimezone(c, actorInfo.activeIp);
 			await this.setIpDetailContext(c, actorInfo);
 		}
+		regKeyInfo.roleInfo = await this.attachRolePermInfo(c, regKeyInfo.roleInfo);
+		if (actorInfo?.role) actorInfo.role = await this.attachRolePermInfo(c, actorInfo.role);
 		const message = regKeyManageMsgTemplate(action, regKeyInfo, actorInfo, extraInfo);
 		await this.sendTelegramMessage(c, message);
 	},
@@ -156,6 +185,7 @@ const telegramService = {
 	async sendLoginNotification(c, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		const message = loginMsgTemplate(userInfo);
 		const url = customDomain ? `${domainUtils.toOssDomain(customDomain)}/#/user` : 'https://www.cloudflare.com/404';
 		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url } }]] });
@@ -164,6 +194,7 @@ const telegramService = {
 	async sendRegisterNotification(c, userInfo, accountCount, roleInfo = null) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.createIp);
 		await this.setIpDetailContext(c, userInfo, 'createIp');
+		roleInfo = await this.attachRolePermInfo(c, roleInfo);
 		const message = registerMsgTemplate(userInfo, accountCount, roleInfo);
 		await this.sendTelegramMessage(c, message);
 	},
@@ -172,6 +203,8 @@ const telegramService = {
 		adminUser.timezone = await timezoneUtils.getTimezone(c, adminUser.activeIp);
 		await this.setIpDetailContext(c, newUserInfo, 'createIp');
 		await this.setIpDetailContext(c, adminUser);
+		roleInfo = await this.attachRolePermInfo(c, roleInfo);
+		adminUser.role = await this.attachRolePermInfo(c, adminUser.role);
 		const message = adminCreateUserMsgTemplate(newUserInfo, roleInfo, adminUser);
 		await this.sendTelegramMessage(c, message);
 	},
@@ -182,6 +215,7 @@ const telegramService = {
 		const webAppUrl = customDomain ? `${domainUtils.toOssDomain(customDomain)}/api/telegram/getEmail/${jwtToken}` : 'https://www.cloudflare.com/404';
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		const message = sendEmailMsgTemplate(emailInfo, userInfo);
 		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
 	},
@@ -189,18 +223,21 @@ const telegramService = {
 	async sendEmailDeleteNotification(c, emailIds, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		await this.sendTelegramMessage(c, deleteEmailMsgTemplate(emailIds, userInfo));
 	},
 
 	async sendAddAddressNotification(c, addressInfo, userInfo, totalAddresses) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		await this.sendTelegramMessage(c, addAddressMsgTemplate(addressInfo, userInfo, totalAddresses));
 	},
 
 	async sendDeleteAddressNotification(c, addressEmail, userInfo, remainingAddresses) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		await this.sendTelegramMessage(c, deleteAddressMsgTemplate(addressEmail, userInfo, remainingAddresses));
 	},
 
@@ -208,6 +245,10 @@ const telegramService = {
 		changedBy.timezone = await timezoneUtils.getTimezone(c, changedBy.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		await this.setIpDetailContext(c, changedBy);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		changedBy.role = await this.attachRolePermInfo(c, changedBy.role);
+		oldRole = await this.attachRolePermInfo(c, oldRole);
+		newRole = await this.attachRolePermInfo(c, newRole);
 		await this.sendTelegramMessage(c, roleChangeMsgTemplate(userInfo, oldRole, newRole, changedBy));
 	},
 
@@ -215,18 +256,22 @@ const telegramService = {
 		changedBy.timezone = await timezoneUtils.getTimezone(c, changedBy.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		await this.setIpDetailContext(c, changedBy);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		changedBy.role = await this.attachRolePermInfo(c, changedBy.role);
 		await this.sendTelegramMessage(c, userStatusChangeMsgTemplate(userInfo, oldStatus, newStatus, changedBy));
 	},
 
 	async sendPasswordResetNotification(c, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		await this.sendTelegramMessage(c, passwordResetMsgTemplate(userInfo));
 	},
 
 	async sendUserSelfDeleteNotification(c, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		await this.sendTelegramMessage(c, userSelfDeleteMsgTemplate(userInfo));
 	},
 
@@ -234,6 +279,8 @@ const telegramService = {
 		adminUser.timezone = await timezoneUtils.getTimezone(c, adminUser.activeIp);
 		await this.setIpDetailContext(c, deletedUser);
 		await this.setIpDetailContext(c, adminUser);
+		deletedUser.role = await this.attachRolePermInfo(c, deletedUser.role);
+		adminUser.role = await this.attachRolePermInfo(c, adminUser.role);
 		await this.sendTelegramMessage(c, adminDeleteUserMsgTemplate(deletedUser, adminUser));
 	},
 
@@ -244,6 +291,7 @@ const telegramService = {
 	},
 
 	async sendQuotaWarningNotification(c, userInfo, quotaType) {
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		await this.sendTelegramMessage(c, quotaWarningMsgTemplate(userInfo, quotaType));
 	}
 };
