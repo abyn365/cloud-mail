@@ -12,6 +12,24 @@ function isSafeUrl(value) {
   return true
 }
 
+
+
+function sanitizeStylesheet(value) {
+  if (!value) return ''
+  const lowered = value.toLowerCase()
+
+  if (
+    lowered.includes('expression(') ||
+    lowered.includes('javascript:') ||
+    lowered.includes('vbscript:') ||
+    lowered.includes('@import')
+  ) {
+    return ''
+  }
+
+  return value
+}
+
 function sanitizeInlineStyle(value) {
   if (!value) return ''
 
@@ -69,4 +87,8 @@ export function sanitizeHtml(input) {
 
 export function sanitizeCssDeclaration(value) {
   return sanitizeInlineStyle(value)
+}
+
+export function sanitizeCssStylesheet(value) {
+  return sanitizeStylesheet(value)
 }

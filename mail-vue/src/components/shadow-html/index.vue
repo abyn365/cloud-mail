@@ -6,7 +6,11 @@
 
 <script setup>
 import { ref, onMounted, watch } from 'vue'
+<<<<<<< codex/review-code-for-security-vulnerabilities-mqoyk6
+import { sanitizeCssDeclaration, sanitizeCssStylesheet, sanitizeHtml } from '@/utils/html-sanitize.js'
+=======
 import { sanitizeCssDeclaration, sanitizeHtml } from '@/utils/html-sanitize.js'
+>>>>>>> main
 
 const props = defineProps({
   html: {
@@ -26,12 +30,30 @@ function updateContent() {
   const bodyStyleRegex = /<body[^>]*style="([^"]*)"[^>]*>/i;
   const bodyStyleMatch = props.html.match(bodyStyleRegex);
   const bodyStyle = bodyStyleMatch ? sanitizeCssDeclaration(bodyStyleMatch[1]) : '';
+<<<<<<< codex/review-code-for-security-vulnerabilities-mqoyk6
+
+  // 2. 提取 style 标签内容（兼容完整 HTML 邮件模板）
+  const styleTagRegex = /<style[^>]*>([\s\S]*?)<\/style>/gi
+  let styleMatch
+  const safeStyleBlocks = []
+
+  while ((styleMatch = styleTagRegex.exec(props.html)) !== null) {
+    const styleContent = sanitizeCssStylesheet(styleMatch[1] || '')
+    if (styleContent) {
+      safeStyleBlocks.push(styleContent)
+    }
+  }
+
+  // 3. 移除 body 标签（保留内容）
+  const cleanedHtml = props.html.replace(/<\/?body[^>]*>/gi, '')
+=======
 
   // 2. 移除 <body> 标签（保留内容）
   const cleanedHtml = props.html.replace(/<\/?body[^>]*>/gi, '');
+>>>>>>> main
   const safeHtml = sanitizeHtml(cleanedHtml)
 
-  // 3. 将 body 的 style 应用到 .shadow-content
+  // 4. 将 body 的 style 应用到 .shadow-content
   shadowRoot.innerHTML = `
     <style>
       :host {
@@ -72,6 +94,8 @@ function updateContent() {
         max-width: 100%;
         height: auto !important;
       }
+
+      ${safeStyleBlocks.join('\n')}
 
     </style>
     <div class="shadow-content">
