@@ -54,7 +54,8 @@ const regKeyService = {
 				code,
 				count,
 				expireTime,
-				roleName: roleRow?.name
+				roleName: roleRow?.name,
+				roleInfo: roleRow
 			}, actor);
 		} catch (e) {
 			console.error('Failed to send reg key create notification:', e);
@@ -76,7 +77,8 @@ const regKeyService = {
 				const roleRow = await roleService.selectById(c, row.roleId);
 				await telegramService.sendRegKeyManageNotification(c, 'delete', {
 					...row,
-					roleName: roleRow?.name
+					roleName: roleRow?.name,
+				roleInfo: roleRow
 				}, actor);
 			}
 		} catch (e) {
@@ -98,7 +100,8 @@ const regKeyService = {
 				const roleRow = await roleService.selectById(c, row.roleId);
 				await telegramService.sendRegKeyManageNotification(c, 'clear', {
 					...row,
-					roleName: roleRow?.name
+					roleName: roleRow?.name,
+				roleInfo: roleRow
 				}, actor);
 			}
 		} catch (e) {
@@ -156,7 +159,8 @@ const regKeyService = {
 			const roleRow = after ? await roleService.selectById(c, after.roleId) : (before ? await roleService.selectById(c, before.roleId) : null);
 			await telegramService.sendRegKeyManageNotification(c, 'use', {
 				...(after || before),
-				roleName: roleRow?.name
+				roleName: roleRow?.name,
+				roleInfo: roleRow
 			}, actor, {
 				beforeCount: before?.count,
 				afterCount: after?.count

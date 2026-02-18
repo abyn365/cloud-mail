@@ -56,6 +56,18 @@ function formatRoleInfo(roleInfo) {
 	return roleText;
 }
 
+
+function formatIpDetail(ipDetail) {
+	if (!ipDetail) return '';
+	const security = ipDetail.security || {};
+	const location = ipDetail.location || {};
+	const network = ipDetail.network || {};
+	return `
+🛡️ VPN/Proxy/Tor/Relay: ${security.vpn ? 'Y' : 'N'}/${security.proxy ? 'Y' : 'N'}/${security.tor ? 'Y' : 'N'}/${security.relay ? 'Y' : 'N'}
+🏙️ Location: ${(location.city || '-')}${location.region ? `, ${location.region}` : ''}, ${location.country || '-'}
+🏢 ASN Org: ${network.autonomous_system_organization || '-'}`;
+}
+
 // Template untuk notifikasi penerimaan email
 export default function emailMsgTemplate(email, tgMsgTo, tgMsgFrom, tgMsgText, senderTimezone = null) {
 
@@ -106,7 +118,7 @@ export function loginMsgTemplate(userInfo) {
 	return `🔐 <b>User Login</b>
 
 📧 Email: <code>${userInfo.email}</code>${formatRoleInfo(userInfo.role)}
-📍 IP Address: <code>${userInfo.activeIp}</code>
+📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
 📱 Device: ${userInfo.device || 'Unknown'}
 💻 OS: ${userInfo.os || 'Unknown'}
 🌐 Browser: ${userInfo.browser || 'Unknown'}
@@ -119,7 +131,7 @@ export function registerMsgTemplate(userInfo, accountCount, roleInfo = null) {
 
 📧 Email: <code>${userInfo.email}</code>${formatRoleInfo(roleInfo)}
 📬 Addresses: ${accountCount}
-📍 Registration IP: <code>${userInfo.createIp}</code>
+📍 Registration IP: <code>${userInfo.createIp}</code>${formatIpDetail(userInfo.createIpDetail || userInfo.ipDetail)}
 📱 Device: ${userInfo.device || 'Unknown'}
 💻 OS: ${userInfo.os || 'Unknown'}
 🌐 Browser: ${userInfo.browser || 'Unknown'}
@@ -155,7 +167,7 @@ export function sendEmailMsgTemplate(emailInfo, userInfo) {
 
 	template += `
 
-📍 Sender IP: <code>${userInfo.activeIp}</code>
+📍 Sender IP: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
 💻 Device: ${userInfo.device || 'Unknown'} / ${userInfo.os || 'Unknown'}`;
 
 	// Tambahkan info send quota jika ada
@@ -181,7 +193,7 @@ export function deleteEmailMsgTemplate(emailIds, userInfo) {
 📧 User: <code>${userInfo.email}</code>${formatRoleInfo(userInfo.role)}
 🔢 Email Count: ${count}
 📋 Email IDs: <code>${emailIds}</code>
-📍 IP Address: <code>${userInfo.activeIp}</code>
+📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
 💻 Device: ${userInfo.device || 'Unknown'} / ${userInfo.os || 'Unknown'}
 ${formatDualTime(new Date().toISOString(), userInfo.timezone)}`;
 }
@@ -194,7 +206,7 @@ export function addAddressMsgTemplate(addressInfo, userInfo, totalAddresses) {
 📬 New Address: <code>${addressInfo.email}</code>
 📝 Name: ${addressInfo.name}
 🔢 Total Addresses: ${totalAddresses}${userInfo.role?.accountCount ? `/${userInfo.role.accountCount}` : ''}
-📍 IP Address: <code>${userInfo.activeIp}</code>
+📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
 💻 Device: ${userInfo.device || 'Unknown'} / ${userInfo.os || 'Unknown'}
 ${formatDualTime(new Date().toISOString(), userInfo.timezone)}`;
 }
@@ -206,7 +218,7 @@ export function deleteAddressMsgTemplate(addressEmail, userInfo, remainingAddres
 📧 User: <code>${userInfo.email}</code>${formatRoleInfo(userInfo.role)}
 📬 Deleted Address: <code>${addressEmail}</code>
 🔢 Remaining Addresses: ${remainingAddresses}${userInfo.role?.accountCount ? `/${userInfo.role.accountCount}` : ''}
-📍 IP Address: <code>${userInfo.activeIp}</code>
+📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
 💻 Device: ${userInfo.device || 'Unknown'} / ${userInfo.os || 'Unknown'}
 ${formatDualTime(new Date().toISOString(), userInfo.timezone)}`;
 }
@@ -216,7 +228,7 @@ export function roleChangeMsgTemplate(userInfo, oldRole, newRole, changedBy) {
 	return `🔄 <b>Role Changed</b>
 
 📧 User: <code>${userInfo.email}</code>
-📍 IP Address: <code>${userInfo.activeIp}</code>
+📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
 
 <b>Role Update:</b>
 ❌ Old Role: <b>${oldRole.name}</b>
@@ -242,14 +254,14 @@ export function userStatusChangeMsgTemplate(userInfo, oldStatus, newStatus, chan
 	return `⚠️ <b>User Status Changed</b>
 
 📧 User: <code>${userInfo.email}</code>${formatRoleInfo(userInfo.role)}
-📍 User IP: <code>${userInfo.activeIp || 'Unknown'}</code>
+📍 User IP: <code>${userInfo.activeIp || 'Unknown'}</code>${formatIpDetail(userInfo.ipDetail)}
 
 <b>Status Update:</b>
 Old: ${statusText[oldStatus] || 'Unknown'}
 New: ${statusText[newStatus] || 'Unknown'}
 
 👨‍💼 Changed By: <code>${changedBy.email}</code>${formatRoleInfo(changedBy.role)}
-📍 Admin IP: <code>${changedBy.activeIp}</code>
+📍 Admin IP: <code>${changedBy.activeIp}</code>${formatIpDetail(changedBy.ipDetail)}
 💻 Device: ${changedBy.device || 'Unknown'} / ${changedBy.os || 'Unknown'}
 ${formatDualTime(new Date().toISOString(), changedBy.timezone)}`;
 }
@@ -259,7 +271,7 @@ export function passwordResetMsgTemplate(userInfo) {
 	return `🔐 <b>Password Reset</b>
 
 📧 User: <code>${userInfo.email}</code>${formatRoleInfo(userInfo.role)}
-📍 IP Address: <code>${userInfo.activeIp}</code>
+📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
 💻 Device: ${userInfo.device || 'Unknown'} / ${userInfo.os || 'Unknown'}
 🌐 Browser: ${userInfo.browser || 'Unknown'}
 ${formatDualTime(new Date().toISOString(), userInfo.timezone)}`;
@@ -272,7 +284,7 @@ export function userSelfDeleteMsgTemplate(userInfo) {
 📧 Email: <code>${userInfo.email}</code>${formatRoleInfo(userInfo.role)}
 📬 Addresses: ${userInfo.addressCount || 0}
 📨 Total Emails: ${userInfo.emailCount || 0}
-📍 IP Address: <code>${userInfo.activeIp}</code>
+📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
 💻 Device: ${userInfo.device || 'Unknown'} / ${userInfo.os || 'Unknown'}
 📅 Account Age: ${userInfo.accountAge || 'Unknown'}
 ${formatDualTime(new Date().toISOString(), userInfo.timezone)}`;
@@ -289,18 +301,18 @@ export function adminDeleteUserMsgTemplate(deletedUser, adminUser) {
 
 <b>Deleted By:</b>
 👨‍💼 Admin: <code>${adminUser.email}</code>${formatRoleInfo(adminUser.role)}
-📍 IP Address: <code>${adminUser.activeIp}</code>
+📍 IP Address: <code>${adminUser.activeIp}</code>${formatIpDetail(adminUser.ipDetail)}
 💻 Device: ${adminUser.device || 'Unknown'} / ${adminUser.os || 'Unknown'}
 ${formatDualTime(new Date().toISOString(), adminUser.timezone)}`;
 }
 
 // Template untuk notifikasi failed login attempts
-export function failedLoginMsgTemplate(email, ip, attempts, device, os, browser, timezone) {
+export function failedLoginMsgTemplate(email, ip, attempts, device, os, browser, timezone, ipDetail = null) {
 	return `⚠️ <b>Failed Login Attempt${attempts > 1 ? 's' : ''}</b>
 
 📧 Email: <code>${email}</code>
 🔢 Attempts: ${attempts}
-📍 IP Address: <code>${ip}</code>
+📍 IP Address: <code>${ip}</code>${formatIpDetail(ipDetail)}
 💻 Device: ${device || 'Unknown'} / ${os || 'Unknown'}
 🌐 Browser: ${browser || 'Unknown'}
 ${formatDualTime(new Date().toISOString(), timezone)}
@@ -348,7 +360,21 @@ export function regKeyManageMsgTemplate(action, regKeyInfo, actorInfo, extraInfo
 🔑 Code: <code>${regKeyInfo?.code || '-'}</code>
 👤 Role: <b>${regKeyInfo?.roleName || '-'}</b>
 🔢 Remaining: ${afterCount}
-${action === 'use' ? `📉 Usage: ${beforeCount} ➜ ${afterCount}\n` : ''}${regKeyInfo?.expireTime ? `⏳ Expire: ${regKeyInfo.expireTime}\n` : ''}${actorInfo?.email ? `👨‍💼 By: <code>${actorInfo.email}</code>${formatRoleInfo(actorInfo.role)}\n` : ''}${actorInfo?.activeIp ? `📍 IP Address: <code>${actorInfo.activeIp}</code>\n` : ''}${formatDualTime(new Date().toISOString(), actorInfo?.timezone)}`;
+${action === 'use' ? `📉 Usage: ${beforeCount} ➜ ${afterCount}\n` : ''}${regKeyInfo?.expireTime ? `⏳ Expire: ${regKeyInfo.expireTime}\n` : ''}${actorInfo?.email ? `👨‍💼 By: <code>${actorInfo.email}</code>\n` : ''}${regKeyInfo?.roleInfo ? `${formatRoleInfo(regKeyInfo.roleInfo)}\n` : ''}${actorInfo?.activeIp ? `📍 IP Address: <code>${actorInfo.activeIp}</code>${formatIpDetail(actorInfo.ipDetail)}\n` : ''}${formatDualTime(new Date().toISOString(), actorInfo?.timezone)}`;
+}
+
+
+
+export function adminCreateUserMsgTemplate(newUser, roleInfo, adminUser) {
+	return `🆕 <b>User Created by Admin</b>
+
+📧 User: <code>${newUser.email}</code>${formatRoleInfo(roleInfo)}
+📍 Registration IP: <code>${newUser.createIp || '-'}</code>${formatIpDetail(newUser.createIpDetail || newUser.ipDetail)}
+💻 Device: ${newUser.device || 'Unknown'} / ${newUser.os || 'Unknown'}
+
+👨‍💼 Admin: <code>${adminUser.email}</code>
+📍 Admin IP: <code>${adminUser.activeIp}</code>${formatIpDetail(adminUser.ipDetail)}
+${formatDualTime(new Date().toISOString(), adminUser.timezone)}`;
 }
 
 // Template untuk detail keamanan IP (vpnapi.io)
