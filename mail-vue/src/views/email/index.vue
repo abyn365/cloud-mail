@@ -17,6 +17,7 @@
             v-if="params.timeSort === 0" width="28" height="28"/>
       <Icon class="icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-up-outline" v-else
             width="28" height="28"/>
+      <Icon class="icon" @click="readAll" icon="fluent:mail-read-16-regular" width="22" height="22"/>
     </template>
 
   </emailScroll>
@@ -27,13 +28,14 @@ import {useAccountStore} from "@/store/account.js";
 import {useEmailStore} from "@/store/email.js";
 import {useSettingStore} from "@/store/setting.js";
 import emailScroll from "@/components/email-scroll/index.vue"
-import {emailList, emailDelete, emailLatest, emailRead} from "@/request/email.js";
+import {emailList, emailDelete, emailLatest, emailRead, emailReadAll} from "@/request/email.js";
 import {starAdd, starCancel} from "@/request/star.js";
 import {defineOptions, h, onMounted, reactive, ref, watch} from "vue";
 import {sleep} from "@/utils/time-utils.js";
 import router from "@/router/index.js";
 import {Icon} from "@iconify/vue";
 import { useRoute } from 'vue-router'
+import i18n from "@/i18n/index.js";
 
 defineOptions({
   name: 'email'
@@ -145,6 +147,22 @@ function getEmailList(emailId, size) {
     data.latestEmail.reqAccountId = accountId;
     data.latestEmail.allReceive = allReceive;
     return data;
+  })
+}
+
+function readAll() {
+  const accountId = accountStore.currentAccountId;
+  const allReceive = accountStore.currentAccount.allReceive;
+
+  emailReadAll(accountId, allReceive).then(() => {
+    ElMessage({
+      message: i18n.global.t('markAllAsReadSuccess'),
+      type: 'success',
+      plain: true,
+      grouping: true,
+      repeatNum: -4,
+    })
+    scroll.value.refreshList();
   })
 }
 

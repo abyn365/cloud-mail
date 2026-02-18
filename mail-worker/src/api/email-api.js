@@ -34,3 +34,7 @@ app.put('/email/read', async (c) => {
 	return c.json(result.ok());
 })
 
+app.put('/email/read-all', async (c) => {
+	await emailService.readAll(c, await c.req.json(), userContext.getUserId(c));
+	return c.json(result.ok());
+})
