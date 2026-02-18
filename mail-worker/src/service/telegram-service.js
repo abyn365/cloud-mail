@@ -157,7 +157,8 @@ const telegramService = {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		const message = loginMsgTemplate(userInfo);
-		await this.sendTelegramMessage(c, message);
+		const url = customDomain ? `${domainUtils.toOssDomain(customDomain)}/#/user` : 'https://www.cloudflare.com/404';
+		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url } }]] });
 	},
 
 	async sendRegisterNotification(c, userInfo, accountCount, roleInfo = null) {
