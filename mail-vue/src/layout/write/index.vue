@@ -354,15 +354,17 @@ async function sendEmail() {
   emailSend(form, (e) => {
     percent.value = Math.round((e.loaded * 98) / e.total)
   }).then(emailList => {
-    const email = emailList[0]
-    emailList.forEach(item => {
+    const normalizedList = Array.isArray(emailList) ? emailList : (emailList ? [emailList] : [])
+    const email = normalizedList[0]
+
+    normalizedList.forEach(item => {
       emailStore.sendScroll?.addItem(item)
     })
 
     ElNotification({
       title: t('sendSuccessMsg'),
       type: "success",
-      message: h('span', {style: 'color: teal'}, email.subject),
+      message: h('span', {style: 'color: teal'}, email?.subject || form.subject),
       position: 'bottom-right'
     })
 
@@ -566,7 +568,8 @@ function close() {
   if (backReply.sendType === 'reply' || backReply.sendType === 'forward') {
     let subjectFlag = form.subject === backReply.subject
     let contentFlag = editor.value.getContent() === backReply.content
-    let receiveFlag = form.receiveEmail.length === 1 && form.receiveEmail[0] === backReply.receiveEmail[0]
+    const originalReplyTarget = backReply.receiveEmail?.[0] || ''
+    let receiveFlag = form.receiveEmail.length === 1 && form.receiveEmail[0] === originalReplyTarget
     if (backReply.sendType === 'forward' && form.receiveEmail.length === 0) {
       receiveFlag = true;
     }
