@@ -316,7 +316,6 @@ const en = {
     details: 'Details',
     userDetails: 'User Details',
     markAsRead: 'Mark as Read',
-    markAllAsReadSuccess: 'All emails have been marked as read',
     star: 'Star',
     setRole: 'Set Role',
     adminDeleteUser: 'Delete User',
