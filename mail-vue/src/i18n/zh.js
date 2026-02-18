@@ -65,6 +65,7 @@ const zh = {
     restore: '恢复',
     tabSetting: '设置',
     registrationIp: '注册IP',
+    recentIpDetails: '近期IP详情',
     recentIP: '近期IP',
     recentActivity: '近期活动',
     loginDevice: '登录设备',

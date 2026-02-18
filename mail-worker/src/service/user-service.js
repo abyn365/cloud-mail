@@ -251,6 +251,25 @@ const userService = {
 		const delSendMap = Object.fromEntries(delSendCounts.map(item => [item.userId, item.count]));
 		const delAccountMap = Object.fromEntries(delAccountCounts.map(item => [item.userId, item.count]));
 
+		const activeIps = [...new Set(list.map(item => item.activeIp).filter(Boolean))];
+		let ipDetailMap = {};
+		if (activeIps.length > 0) {
+			const placeholders = activeIps.map(() => '?').join(',');
+			const { results } = await c.env.db.prepare(`SELECT ip, data FROM ip_security_cache WHERE ip IN (${placeholders})`).bind(...activeIps).all();
+			ipDetailMap = Object.fromEntries((results || []).map(row => {
+				try {
+					const detail = JSON.parse(row.data || '{}');
+					const security = detail.security || {};
+					const location = detail.location || {};
+					const network = detail.network || {};
+					const summary = `VPN:${security.vpn ? 'Yes' : 'No'} | Proxy:${security.proxy ? 'Yes' : 'No'} | Tor:${security.tor ? 'Yes' : 'No'} | Relay:${security.relay ? 'Yes' : 'No'} | ${location.city || '-'}${location.region ? `, ${location.region}` : ''}, ${location.country || '-'} | ASN:${network.autonomous_system_organization || '-'}`;
+					return [row.ip, summary];
+				} catch (e) {
+					return [row.ip, ''];
+				}
+			}));
+		}
+
 		for (const user of list) {
 
 			const userId = user.userId;
@@ -282,6 +301,7 @@ const userService = {
 			}
 
 			user.sendAction = sendAction;
+			user.activeIpDetail = ipDetailMap[user.activeIp] || '';
 		}
 
 		return { list, total };

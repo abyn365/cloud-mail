@@ -360,7 +360,7 @@ export function regKeyManageMsgTemplate(action, regKeyInfo, actorInfo, extraInfo
 🔑 Code: <code>${regKeyInfo?.code || '-'}</code>
 👤 Role: <b>${regKeyInfo?.roleName || '-'}</b>
 🔢 Remaining: ${afterCount}
-${action === 'use' ? `📉 Usage: ${beforeCount} ➜ ${afterCount}\n` : ''}${regKeyInfo?.expireTime ? `⏳ Expire: ${regKeyInfo.expireTime}\n` : ''}${actorInfo?.email ? `👨‍💼 By: <code>${actorInfo.email}</code>\n` : ''}${regKeyInfo?.roleInfo ? `${formatRoleInfo(regKeyInfo.roleInfo)}\n` : ''}${actorInfo?.activeIp ? `📍 IP Address: <code>${actorInfo.activeIp}</code>${formatIpDetail(actorInfo.ipDetail)}\n` : ''}${formatDualTime(new Date().toISOString(), actorInfo?.timezone)}`;
+${action === 'use' ? `📉 Usage: ${beforeCount} ➜ ${afterCount}\n` : ''}${regKeyInfo?.expireTime ? `⏳ Expire: ${regKeyInfo.expireTime}\n` : ''}${regKeyInfo?.roleInfo ? `${formatRoleInfo(regKeyInfo.roleInfo)}\n` : ''}${actorInfo?.email ? `👨‍💼 By: <code>${actorInfo.email}</code>\n` : ''}${actorInfo?.role ? `🧩 Actor Role: <b>${actorInfo.role.name || 'Unknown'}</b>\n` : ''}${actorInfo?.activeIp ? `📍 IP Address: <code>${actorInfo.activeIp}</code>${formatIpDetail(actorInfo.ipDetail)}\n` : ''}${formatDualTime(new Date().toISOString(), actorInfo?.timezone)}`;
 }
 
 

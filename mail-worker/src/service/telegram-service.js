@@ -154,7 +154,6 @@ const telegramService = {
 	},
 
 	async sendLoginNotification(c, userInfo) {
-		const { customDomain } = await settingService.query(c);
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		const message = loginMsgTemplate(userInfo);
