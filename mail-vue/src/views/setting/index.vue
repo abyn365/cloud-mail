@@ -281,11 +281,25 @@ function submitPwd() {
         display: flex;
         align-items: center;
         gap: 10px;
+        min-width: 0;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: unset;
       }
 
       .notify-status {
         color: var(--el-text-color-secondary);
         font-size: 12px;
+        white-space: normal;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        line-height: 1.4;
+      }
+
+      @media (max-width: 767px) {
+        .browser-notify {
+          align-items: flex-start;
+        }
       }
 
       @media (max-width: 767px) {
