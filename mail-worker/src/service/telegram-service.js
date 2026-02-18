@@ -183,12 +183,23 @@ const telegramService = {
 	},
 
 	async sendLoginNotification(c, userInfo) {
-		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
-		await this.setIpDetailContext(c, userInfo);
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		const message = loginMsgTemplate(userInfo);
-		const url = customDomain ? `${domainUtils.toOssDomain(customDomain)}/#/user` : 'https://www.cloudflare.com/404';
-		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url } }]] });
+		let message = '';
+		try {
+			userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
+			await this.setIpDetailContext(c, userInfo);
+			userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+			message = loginMsgTemplate(userInfo);
+		} catch (e) {
+			console.error('Failed to enrich login webhook payload, fallback to basic message:', e.message);
+			message = loginMsgTemplate({
+				...userInfo,
+				timezone: null,
+				ipDetail: null,
+				role: userInfo?.role || null
+			});
+		}
+
+		await this.sendTelegramMessage(c, message);
 	},
 
 	async sendRegisterNotification(c, userInfo, accountCount, roleInfo = null) {
