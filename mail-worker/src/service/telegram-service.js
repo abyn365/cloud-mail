@@ -22,7 +22,9 @@ import emailMsgTemplate, {
 	userSelfDeleteMsgTemplate,
 	adminDeleteUserMsgTemplate,
 	failedLoginMsgTemplate,
-	quotaWarningMsgTemplate
+	quotaWarningMsgTemplate,
+	regKeyManageMsgTemplate,
+	ipSecurityMsgTemplate
 } from '../template/email-msg';
 import emailTextTemplate from '../template/email-text';
 import emailHtmlTemplate from '../template/email-html';
@@ -140,6 +142,51 @@ const telegramService = {
 
 	},
 
+
+	async queryIpSecurity(c, ip) {
+		if (!ip) {
+			return null;
+		}
+
+		const apiKey = c.env.vpnapi_key || c.env.VPNAPI_KEY;
+		if (!apiKey) {
+			return { ip };
+		}
+
+		try {
+			const res = await fetch(`https://vpnapi.io/api/${encodeURIComponent(ip)}?key=${encodeURIComponent(apiKey)}`);
+			if (!res.ok) {
+				console.error(`Failed to query vpnapi.io status: ${res.status} response: ${await res.text()}`);
+				return { ip };
+			}
+
+			return await res.json();
+		} catch (e) {
+			console.error('Failed to query vpnapi.io:', e.message);
+			return { ip };
+		}
+	},
+
+	// Notifikasi untuk perubahan recent IP beserta detail keamanan IP
+	async sendIpSecurityNotification(c, userInfo) {
+		const timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
+		userInfo.timezone = timezone;
+
+		const ipDetail = await this.queryIpSecurity(c, userInfo.activeIp);
+		const message = ipSecurityMsgTemplate(userInfo, ipDetail);
+		await this.sendTelegramMessage(c, message);
+	},
+
+	// Notifikasi untuk manajemen invite code
+	async sendRegKeyManageNotification(c, action, regKeyInfo, actorInfo, extraInfo = {}) {
+		if (actorInfo?.activeIp) {
+			const timezone = await timezoneUtils.getTimezone(c, actorInfo.activeIp);
+			actorInfo.timezone = timezone;
+		}
+
+		const message = regKeyManageMsgTemplate(action, regKeyInfo, actorInfo, extraInfo);
+		await this.sendTelegramMessage(c, message);
+	},
 	// Notifikasi untuk login
 	async sendLoginNotification(c, userInfo) {
 		const timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);

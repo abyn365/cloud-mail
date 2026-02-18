@@ -329,3 +329,52 @@ ${warningText}
 
 ⚠️ User approaching quota limit!`;
 }
+
+// Template untuk notifikasi manajemen invite code
+export function regKeyManageMsgTemplate(action, regKeyInfo, actorInfo, extraInfo = {}) {
+	const actionMap = {
+		create: '🆕 Invite Code Created',
+		use: '🎟️ Invite Code Used',
+		delete: '🗑️ Invite Code Deleted',
+		clear: '🧹 Invite Code Auto Cleared'
+	};
+
+	const title = actionMap[action] || '🎟️ Invite Code Updated';
+	const beforeCount = extraInfo.beforeCount ?? '-';
+	const afterCount = extraInfo.afterCount ?? regKeyInfo?.count ?? '-';
+
+	return `${title ? `<b>${title}</b>` : ''}
+
+🔑 Code: <code>${regKeyInfo?.code || '-'}</code>
+👤 Role: <b>${regKeyInfo?.roleName || '-'}</b>
+🔢 Remaining: ${afterCount}
+${action === 'use' ? `📉 Usage: ${beforeCount} ➜ ${afterCount}\n` : ''}${regKeyInfo?.expireTime ? `⏳ Expire: ${regKeyInfo.expireTime}\n` : ''}${actorInfo?.email ? `👨‍💼 By: <code>${actorInfo.email}</code>${formatRoleInfo(actorInfo.role)}\n` : ''}${actorInfo?.activeIp ? `📍 IP Address: <code>${actorInfo.activeIp}</code>\n` : ''}${formatDualTime(new Date().toISOString(), actorInfo?.timezone)}`;
+}
+
+// Template untuk detail keamanan IP (vpnapi.io)
+export function ipSecurityMsgTemplate(userInfo, ipDetail) {
+	const security = ipDetail?.security || {};
+	const location = ipDetail?.location || {};
+	const network = ipDetail?.network || {};
+
+	return `🌐 <b>Recent IP Updated</b>
+
+📧 User: <code>${userInfo.email}</code>${formatRoleInfo(userInfo.role)}
+📍 Recent IP: <code>${ipDetail?.ip || userInfo.activeIp || '-'}</code>
+
+<b>Security Check</b>
+🛡️ VPN: ${security.vpn ? '✅ Yes' : '❌ No'}
+🧭 Proxy: ${security.proxy ? '✅ Yes' : '❌ No'}
+🕸️ Tor: ${security.tor ? '✅ Yes' : '❌ No'}
+🔁 Relay: ${security.relay ? '✅ Yes' : '❌ No'}
+
+<b>Location</b>
+🏙️ City/Region: ${(location.city || '-')}${location.region ? `, ${location.region}` : ''}
+🌍 Country: ${location.country || '-'} (${location.country_code || '-'})
+
+<b>Network</b>
+🏢 ASN Org: ${network.autonomous_system_organization || '-'}
+🔢 ASN: ${network.autonomous_system_number || '-'}
+
+${formatDualTime(new Date().toISOString(), userInfo.timezone)}`;
+}

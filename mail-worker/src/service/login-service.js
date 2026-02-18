@@ -147,7 +147,7 @@ const loginService = {
 		}
 
 		if (regKey !== settingConst.regKey.CLOSE && type) {
-			await regKeyService.reduceCount(c, code, 1);
+			await regKeyService.reduceCount(c, code, 1, userId);
 		}
 
 		if (registerVerify === settingConst.registerVerify.COUNT && !regVerifyOpen) {
