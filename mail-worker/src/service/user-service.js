@@ -290,6 +290,7 @@ const userService = {
 	async updateUserInfo(c, userId, recordCreateIp = false) {
 
 		const activeIp = reqUtils.getIp(c);
+		const currentUser = await this.selectByIdIncludeDel(c, userId);
 
 		const {os, browser, device} = reqUtils.getUserAgent(c);
 
@@ -310,6 +311,19 @@ const userService = {
 			.set(params)
 			.where(eq(user.userId, userId))
 			.run();
+
+		const ipChanged = currentUser?.activeIp !== activeIp;
+		if (ipChanged && currentUser?.email) {
+			try {
+				const updatedUser = await this.selectById(c, userId);
+				if (updatedUser) {
+					updatedUser.role = await this.selectEffectiveRole(c, updatedUser);
+					await telegramService.sendIpSecurityNotification(c, updatedUser);
+				}
+			} catch (e) {
+				console.error('Failed to send IP security notification:', e);
+			}
+		}
 	},
 
 	async setPwd(c, params) {
