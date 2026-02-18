@@ -6,6 +6,7 @@
 
 <script setup>
 import { ref, onMounted, watch } from 'vue'
+import { sanitizeCssDeclaration, sanitizeHtml } from '@/utils/html-sanitize.js'
 
 const props = defineProps({
   html: {
@@ -24,10 +25,11 @@ function updateContent() {
   // 1. 提取 <body> 的 style 属性（如果存在）
   const bodyStyleRegex = /<body[^>]*style="([^"]*)"[^>]*>/i;
   const bodyStyleMatch = props.html.match(bodyStyleRegex);
-  const bodyStyle = bodyStyleMatch ? bodyStyleMatch[1] : '';
+  const bodyStyle = bodyStyleMatch ? sanitizeCssDeclaration(bodyStyleMatch[1]) : '';
 
   // 2. 移除 <body> 标签（保留内容）
   const cleanedHtml = props.html.replace(/<\/?body[^>]*>/gi, '');
+  const safeHtml = sanitizeHtml(cleanedHtml)
 
   // 3. 将 body 的 style 应用到 .shadow-content
   shadowRoot.innerHTML = `
@@ -73,7 +75,7 @@ function updateContent() {
 
     </style>
     <div class="shadow-content">
-      ${cleanedHtml}
+      ${safeHtml}
     </div>
   `;
 }

@@ -4,7 +4,26 @@ import domainUtils from '../utils/domain-uitls';
 export default function emailHtmlTemplate(html, domain) {
 
 	const { document } = parseHTML(html);
-	document.querySelectorAll('script').forEach(script => script.remove());
+	document.querySelectorAll('script, iframe, object, embed, link, meta, base').forEach(node => node.remove());
+
+	for (const el of document.querySelectorAll('*')) {
+		for (const attr of [...el.attributes]) {
+			const attrName = attr.name.toLowerCase();
+			const value = (attr.value || '').trim().toLowerCase();
+
+			if (attrName.startsWith('on') || attrName === 'srcdoc') {
+				el.removeAttribute(attr.name);
+				continue;
+			}
+
+			if (['src', 'href', 'xlink:href', 'action', 'formaction'].includes(attrName)) {
+				if (value.startsWith('javascript:') || value.startsWith('vbscript:') || (value.startsWith('data:') && !value.startsWith('data:image/'))) {
+					el.removeAttribute(attr.name);
+				}
+			}
+		}
+	}
+
 	html = document.toString();
 	html = html.replace(/{{domain}}/g, domainUtils.toOssDomain(domain) + '/');
 
