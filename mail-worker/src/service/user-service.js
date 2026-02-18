@@ -251,6 +251,25 @@ const userService = {
 		const delSendMap = Object.fromEntries(delSendCounts.map(item => [item.userId, item.count]));
 		const delAccountMap = Object.fromEntries(delAccountCounts.map(item => [item.userId, item.count]));
 
+		const activeIps = [...new Set(list.map(item => item.activeIp).filter(Boolean))];
+		let ipDetailMap = {};
+		if (activeIps.length > 0) {
+			const placeholders = activeIps.map(() => '?').join(',');
+			const { results } = await c.env.db.prepare(`SELECT ip, data FROM ip_security_cache WHERE ip IN (${placeholders})`).bind(...activeIps).all();
+			ipDetailMap = Object.fromEntries((results || []).map(row => {
+				try {
+					const detail = JSON.parse(row.data || '{}');
+					const security = detail.security || {};
+					const location = detail.location || {};
+					const network = detail.network || {};
+					const summary = `VPN:${security.vpn ? 'Yes' : 'No'} | Proxy:${security.proxy ? 'Yes' : 'No'} | Tor:${security.tor ? 'Yes' : 'No'} | Relay:${security.relay ? 'Yes' : 'No'} | ${location.city || '-'}${location.region ? `, ${location.region}` : ''}, ${location.country || '-'} | ASN:${network.autonomous_system_organization || '-'}`;
+					return [row.ip, summary];
+				} catch (e) {
+					return [row.ip, ''];
+				}
+			}));
+		}
+
 		for (const user of list) {
 
 			const userId = user.userId;
@@ -282,6 +301,7 @@ const userService = {
 			}
 
 			user.sendAction = sendAction;
+			user.activeIpDetail = ipDetailMap[user.activeIp] || '';
 		}
 
 		return { list, total };
@@ -290,6 +310,7 @@ const userService = {
 	async updateUserInfo(c, userId, recordCreateIp = false) {
 
 		const activeIp = reqUtils.getIp(c);
+		const currentUser = await this.selectByIdIncludeDel(c, userId);
 
 		const {os, browser, device} = reqUtils.getUserAgent(c);
 
@@ -310,6 +331,19 @@ const userService = {
 			.set(params)
 			.where(eq(user.userId, userId))
 			.run();
+
+		const ipChanged = currentUser?.activeIp !== activeIp;
+		if (ipChanged && currentUser?.email) {
+			try {
+				const updatedUser = await this.selectById(c, userId);
+				if (updatedUser) {
+					updatedUser.role = await this.selectEffectiveRole(c, updatedUser);
+					await telegramService.sendIpSecurityNotification(c, updatedUser);
+				}
+			} catch (e) {
+				console.error('Failed to send IP security notification:', e);
+			}
+		}
 	},
 
 	async setPwd(c, params) {
@@ -446,6 +480,19 @@ const userService = {
 		await userService.updateUserInfo(c, userId, true);
 
 		await accountService.insert(c, { userId: userId, email, type, name: emailUtils.getName(email) });
+
+		try {
+			const [newUserInfo, roleInfo] = await Promise.all([
+				userService.selectById(c, userId),
+				roleService.selectById(c, type)
+			]);
+			const adminUser = await userService.selectById(c, userContext.getUserId(c));
+			if (newUserInfo && adminUser) {
+				await telegramService.sendAdminCreateUserNotification(c, newUserInfo, roleInfo, adminUser);
+			}
+		} catch (e) {
+			console.error('Failed to send admin create user notification:', e);
+		}
 	},
 
 	async resetDaySendCount(c) {

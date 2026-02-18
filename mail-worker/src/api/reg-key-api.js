@@ -14,12 +14,12 @@ app.get('/regKey/list', async (c) => {
 })
 
 app.delete('/regKey/delete', async (c) => {
-	await regKeyService.delete(c, c.req.query());
+	await regKeyService.delete(c, c.req.query(), await userContext.getUserId(c));
 	return c.json(result.ok());
 })
 
 app.delete('/regKey/clearNotUse', async (c) => {
-	await regKeyService.clearNotUse(c);
+	await regKeyService.clearNotUse(c, await userContext.getUserId(c));
 	return c.json(result.ok());
 })
 

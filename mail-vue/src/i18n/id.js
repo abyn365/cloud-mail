@@ -65,6 +65,7 @@ const id = {
     restore: 'Pulihkan',
     tabSetting: 'Pengaturan',
     registrationIp: 'IP Registrasi',
+    recentIpDetails: 'Detail IP Terbaru',
     recentIP: 'IP Terbaru',
     recentActivity: 'Aktivitas Terbaru',
     loginDevice: 'Perangkat Login',
