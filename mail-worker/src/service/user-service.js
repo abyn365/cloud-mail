@@ -1,4 +1,5 @@
 import BizError from '../error/biz-error';
+import telegramService from './telegram-service';
 import accountService from './account-service';
 import orm from '../entity/orm';
 import user from '../entity/user';
@@ -18,6 +19,7 @@ import { t } from '../i18n/i18n'
 import reqUtils from '../utils/req-utils';
 import {oauth} from "../entity/oauth";
 import oauthService from "./oauth-service";
+import userContext from '../security/user-context';
 
 const userService = {
 
@@ -61,8 +63,20 @@ const userService = {
 		if (password < 6) {
 			throw new BizError(t('pwdMinLength'));
 		}
+		
 		const { salt, hash } = await cryptoUtils.hashPassword(password);
 		await orm(c).update(user).set({ password: hash, salt: salt }).where(eq(user.userId, userId)).run();
+		
+		// Send notification
+		try {
+			const userRow = await this.selectById(c, userId);
+			const roleRow = await roleService.selectById(c, userRow.type);
+			userRow.role = roleRow;
+			
+			await telegramService.sendPasswordResetNotification(c, userRow);
+		} catch (e) {
+			console.error('Failed to send password reset notification:', e);
+		}
 	},
 
 	selectByEmail(c, email) {
@@ -95,13 +109,58 @@ const userService = {
 	},
 
 	async delete(c, userId) {
+		const userRow = await this.selectById(c, userId);
+		const roleRow = await roleService.selectById(c, userRow.type);
+		
+		// Get statistics
+		const addressCount = await accountService.countUserAccount(c, userId);
+		const accountAge = dayjs().diff(dayjs(userRow.createTime), 'day');
+		
+		userRow.role = roleRow;
+		userRow.addressCount = addressCount;
+		userRow.accountAge = `${accountAge} days`;
+		
+		// Send notification BEFORE deletion
+		try {
+			await telegramService.sendUserSelfDeleteNotification(c, userRow);
+		} catch (e) {
+			console.error('Failed to send self-delete notification:', e);
+		}
+		
 		await orm(c).update(user).set({ isDel: isDel.DELETE }).where(eq(user.userId, userId)).run();
-		await c.env.kv.delete(kvConst.AUTH_INFO + userId)
+		await c.env.kv.delete(kvConst.AUTH_INFO + userId);
 	},
 
 	async physicsDelete(c, params) {
 		let { userIds } = params;
 		userIds = userIds.split(',').map(Number);
+		
+		// Get admin info
+		const adminUserId = userContext.getUserId(c);
+		const adminUser = await this.selectById(c, adminUserId);
+		const adminRole = await roleService.selectById(c, adminUser.type);
+		adminUser.role = adminRole;
+		
+		// Process each user
+		for (const userId of userIds) {
+			try {
+				const userRow = await this.selectByIdIncludeDel(c, userId);
+				if (userRow) {
+					const roleRow = await roleService.selectById(c, userRow.type);
+					const addressCount = await accountService.countUserAccount(c, userId);
+					
+					userRow.role = roleRow;
+					userRow.addressCount = addressCount;
+					
+					// Send notification
+					await telegramService.sendAdminDeleteUserNotification(c, userRow, adminUser);
+				}
+			} catch (e) {
+				console.error(`Failed to send admin delete notification for user ${userId}:`, e);
+			}
+		}
+		
+		// Perform deletion
 		await accountService.physicsDeleteByUserIds(c, userIds);
 		await oauthService.deleteByUserIds(c, userIds);
 		await orm(c).delete(user).where(inArray(user.userId, userIds)).run();
@@ -221,8 +280,6 @@ const userService = {
 
 	async updateUserInfo(c, userId, recordCreateIp = false) {
 
-
-
 		const activeIp = reqUtils.getIp(c);
 
 		const {os, browser, device} = reqUtils.getUserAgent(c);
@@ -257,6 +314,13 @@ const userService = {
 
 		const { status, userId } = params;
 
+		// Get admin user context
+		const adminUserId = userContext.getUserId(c);
+		
+		// Get old status
+		const userRow = await this.selectById(c, userId);
+		const oldStatus = userRow.status;
+		
 		await orm(c)
 			.update(user)
 			.set({ status })
@@ -266,14 +330,36 @@ const userService = {
 		if (status === userConst.status.BAN) {
 			await c.env.kv.delete(KvConst.AUTH_INFO + userId);
 		}
+		
+		// Get admin info
+		const adminUser = await this.selectById(c, adminUserId);
+		const adminRole = await roleService.selectById(c, adminUser.type);
+		adminUser.role = adminRole;
+		
+		// Get user role
+		const userRole = await roleService.selectById(c, userRow.type);
+		userRow.role = userRole;
+		
+		// Send notification
+		try {
+			await telegramService.sendUserStatusChangeNotification(c, userRow, oldStatus, status, adminUser);
+		} catch (e) {
+			console.error('Failed to send status change notification:', e);
+		}
 	},
 
 	async setType(c, params) {
 
 		const { type, userId } = params;
 
+		// Get admin user context
+		const adminUserId = userContext.getUserId(c);
+		
+		// Get old role
+		const userRow = await this.selectById(c, userId);
+		const oldRole = await roleService.selectById(c, userRow.type);
+		
 		const roleRow = await roleService.selectById(c, type);
-
 		if (!roleRow) {
 			throw new BizError(t('roleNotExist'));
 		}
@@ -283,7 +369,21 @@ const userService = {
 			.set({ type })
 			.where(eq(user.userId, userId))
 			.run();
-
+		
+		// Get new role
+		const newRole = await roleService.selectById(c, type);
+		
+		// Get admin info
+		const adminUser = await this.selectById(c, adminUserId);
+		const adminRole = await roleService.selectById(c, adminUser.type);
+		adminUser.role = adminRole;
+		
+		// Send notification
+		try {
+			await telegramService.sendRoleChangeNotification(c, userRow, oldRole, newRole, adminUser);
+		} catch (e) {
+			console.error('Failed to send role change notification:', e);
+		}
 	},
 
 	async incrUserSendCount(c, quantity, userId) {
