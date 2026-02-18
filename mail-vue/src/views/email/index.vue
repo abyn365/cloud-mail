@@ -90,19 +90,31 @@ function onBrowserNotifyChange(event) {
   browserNotifyOptIn.value = Boolean(event.detail)
 }
 
-function sendBrowserNotification(email) {
+async function sendBrowserNotification(email) {
   if (!browserNotifyOptIn.value || !('Notification' in window) || Notification.permission !== 'granted') {
     return
   }
 
   const title = email.subject || 'New email received'
   const body = `${email.name || email.sendEmail || 'Unknown sender'}`
-
-  new Notification(title, {
+  const options = {
     body,
     icon: '/mail-pwa.png',
+    badge: '/mail-pwa.png',
     tag: `mail-${email.emailId}`,
-  })
+  }
+
+  if ('serviceWorker' in navigator) {
+    try {
+      const registration = await navigator.serviceWorker.ready
+      await registration.showNotification(title, options)
+      return
+    } catch (e) {
+      console.error('Failed to show notification via service worker:', e)
+    }
+  }
+
+  new Notification(title, options)
 }
 
 async function latest() {
@@ -142,7 +154,7 @@ async function latest() {
 
                 existIds.add(email.emailId)
                 scroll.value.addItem(email)
-                sendBrowserNotification(email)
+                await sendBrowserNotification(email)
 
                 await sleep(50)
               }
