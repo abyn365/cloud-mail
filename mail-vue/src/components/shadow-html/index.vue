@@ -40,12 +40,8 @@ function updateContent() {
   }
 
   // 3. 移除 body 标签（保留内容）
-  const cleanedHtml = props.html.replace(/<\/?body[^>]*>/gi, '')
-
-
-  // 2. 移除 <body> 标签（保留内容）
-  const cleanedHtml = props.html.replace(/<\/?body[^>]*>/gi, '');
-  const safeHtml = sanitizeHtml(cleanedHtml)
+  const bodyStrippedHtml = props.html.replace(/<\/?body[^>]*>/gi, '')
+  const safeHtml = sanitizeHtml(bodyStrippedHtml)
 
   // 4. 将 body 的 style 应用到 .shadow-content
   shadowRoot.innerHTML = `
