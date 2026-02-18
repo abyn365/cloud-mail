@@ -13,7 +13,8 @@ import emailMsgTemplate, {
 	loginMsgTemplate,
 	registerMsgTemplate,
 	sendEmailMsgTemplate,
-	deleteEmailMsgTemplate,
+	softDeleteEmailMsgTemplate,
+	hardDeleteEmailMsgTemplate,
 	addAddressMsgTemplate,
 	deleteAddressMsgTemplate,
 	roleChangeMsgTemplate,
@@ -231,11 +232,18 @@ const telegramService = {
 		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
 	},
 
-	async sendEmailDeleteNotification(c, emailIds, userInfo) {
+	async sendEmailSoftDeleteNotification(c, emailIds, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		await this.sendTelegramMessage(c, deleteEmailMsgTemplate(emailIds, userInfo));
+		await this.sendTelegramMessage(c, softDeleteEmailMsgTemplate(emailIds, userInfo));
+	},
+
+	async sendEmailHardDeleteNotification(c, emailIds, userInfo) {
+		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
+		await this.setIpDetailContext(c, userInfo);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		await this.sendTelegramMessage(c, hardDeleteEmailMsgTemplate(emailIds, userInfo));
 	},
 
 	async sendAddAddressNotification(c, addressInfo, userInfo, totalAddresses) {
