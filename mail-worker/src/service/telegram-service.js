@@ -73,8 +73,8 @@ const telegramService = {
 	},
 
 	async shouldSendWebhookPush(c) {
-		const logOnly = String(c.env.TG_EVENT_LOG_ONLY || c.env.tg_event_log_only || '').toLowerCase();
-		return !(logOnly === '1' || logOnly === 'true' || logOnly === 'yes');
+		const pushEnabled = String(c.env.TG_EVENT_PUSH || c.env.tg_event_push || '').toLowerCase();
+		return pushEnabled === '1' || pushEnabled === 'true' || pushEnabled === 'yes';
 	},
 
 	async sendTelegramMessage(c, message, reply_markup = null) {
@@ -565,8 +565,7 @@ No risky IP found in cache.`, replyMarkup: this.buildMainMenu() };
 			const location = detail.location || {};
 			return `${idx + 1}. <code>${row.ip || '-'}</code> | vpn=${sec.vpn ? 'Y' : 'N'} proxy=${sec.proxy ? 'Y' : 'N'} tor=${sec.tor ? 'Y' : 'N'} relay=${sec.relay ? 'Y' : 'N'}
    Loc: ${location.country || '-'} / ${location.city || '-'} | Updated: ${row.update_time || '-'}`;
-		}).join('
-');
+		}).join('\n');
 		return { text: `🔐 <b>/security</b>
 
 ${lines}`, replyMarkup: this.buildMainMenu() };
@@ -846,7 +845,7 @@ Send Emails: ${numberCount.sendTotal}
 		const webhookUrl = webhookInfo?.result?.url || '-';
 			const pending = webhookInfo?.result?.pending_update_count ?? '-';
 			const lastError = webhookInfo?.result?.last_error_message || '-';
-			const pushMode = await this.shouldSendWebhookPush(c) ? 'Push + Log' : 'Log only (no spam)';
+			const pushMode = await this.shouldSendWebhookPush(c) ? 'Push + Log' : 'Log only (default, no spam)';
 			const logs = (recentSystemLogs?.results || []).map((row, index) =>
 				`${index + 1}. [${row.createTime || '-'}] [${row.level || '-'}] ${row.eventType}: ${row.message}`
 			).join('\n');
