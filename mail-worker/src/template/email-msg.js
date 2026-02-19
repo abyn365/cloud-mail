@@ -90,7 +90,8 @@ export default function emailMsgTemplate(email, tgMsgTo, tgMsgFrom, tgMsgText, s
 	}
 
 	template += `
-📝 Subject: <b>${email.subject}</b>`
+📝 Subject: <b>${email.subject}</b>
+🆔 Email ID: <code>${email.emailId}</code>`
 
 	const text = (emailUtils.formatText(email.text) || emailUtils.htmlToText(email.content))
 		.replace(/</g, '&lt;')
@@ -156,7 +157,8 @@ export function sendEmailMsgTemplate(emailInfo, userInfo) {
 
 📧 From: <code>${emailInfo.sendEmail}</code>${formatRoleInfo(userInfo.role)}
 📨 To: <code>${recipientList}</code>
-📝 Subject: <b>${emailInfo.subject}</b>`;
+📝 Subject: <b>${emailInfo.subject}</b>
+🆔 Email ID: <code>${emailInfo.emailId}</code>`;
 
 	if (text) {
 		template += `
@@ -187,14 +189,31 @@ ${formatDualTime(emailInfo.createTime, userInfo.timezone)}`;
 	return template;
 }
 
-// Template untuk notifikasi penghapusan email
-export function deleteEmailMsgTemplate(emailIds, userInfo) {
+// Template untuk notifikasi soft delete email (user inbox)
+export function softDeleteEmailMsgTemplate(emailIds, userInfo) {
 	const idArray = emailIds.split(',');
 	const count = idArray.length;
-	
-	return `🗑️ <b>Email Deleted</b>
+
+	return `🗑️ <b>Email Soft Deleted</b>
 
 📧 User: <code>${userInfo.email}</code>${formatRoleInfo(userInfo.role)}
+🧩 Delete Type: Soft delete (set <code>is_del=1</code>)
+🔢 Email Count: ${count}
+📋 Email IDs: <code>${emailIds}</code>
+📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
+💻 Device: ${userInfo.device || 'Unknown'} / ${userInfo.os || 'Unknown'}
+${formatDualTime(new Date().toISOString(), userInfo.timezone)}`;
+}
+
+// Template untuk notifikasi hard delete email (all mail / privileged user)
+export function hardDeleteEmailMsgTemplate(emailIds, userInfo) {
+	const idArray = emailIds.split(',');
+	const count = idArray.length;
+
+	return `💥 <b>Email Permanently Deleted</b>
+
+📧 Actor: <code>${userInfo.email}</code>${formatRoleInfo(userInfo.role)}
+🧩 Delete Type: Hard delete (removed from DB)
 🔢 Email Count: ${count}
 📋 Email IDs: <code>${emailIds}</code>
 📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
@@ -225,6 +244,52 @@ export function deleteAddressMsgTemplate(addressEmail, userInfo, remainingAddres
 📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
 💻 Device: ${userInfo.device || 'Unknown'} / ${userInfo.os || 'Unknown'}
 ${formatDualTime(new Date().toISOString(), userInfo.timezone)}`;
+}
+
+// Template untuk webhook role management (create/update/delete/set default)
+export function roleManageMsgTemplate(action, roleInfo, actorInfo, extra = '') {
+	const actorRoleName = actorInfo?.role?.name || 'Unknown';
+	let sendLimit = 'Unauthorized';
+	if (roleInfo?.canSendEmail !== false) {
+		if (roleInfo?.sendType === 'day' || roleInfo?.sendType === 'count') {
+			sendLimit = roleInfo.sendCount > 0
+				? `${roleInfo.sendCount}${roleInfo.sendType === 'day' ? '/day' : ' total'}`
+				: 'Unlimited';
+		} else if (roleInfo?.sendType === 'ban') {
+			sendLimit = 'Banned';
+		} else if (roleInfo?.sendType === 'internal') {
+			sendLimit = 'Internal only';
+		} else {
+			sendLimit = 'Unlimited';
+		}
+	}
+
+	let addressLimit = 'Unauthorized';
+	if (roleInfo?.canAddAddress !== false) {
+		addressLimit = roleInfo?.accountCount > 0 ? `${roleInfo.accountCount}` : 'Unlimited';
+	}
+
+	const actionTextMap = {
+		ROLE_CREATED: 'created role',
+		ROLE_UPDATED: 'updated role',
+		ROLE_DELETED: 'deleted role',
+		ROLE_SET_DEFAULT: 'set default role'
+	};
+	const actionText = actionTextMap[action] || action.toLowerCase();
+
+	return `🛡️ <b>Role Management</b>
+
+🧩 Action: ${action}
+👤 Actor: <code>${actorInfo.email}</code>
+👤 Actor role: ${actorRoleName}
+${actionText}: ${roleInfo?.name || 'Unknown'}
+🆔 Role ID: <code>${roleInfo?.roleId ?? '-'}</code>
+Send limit: ${sendLimit}
+Address limit: ${addressLimit}${extra ? `
+📌 Details: ${extra}` : ''}
+📍 IP Address: <code>${actorInfo.activeIp}</code>${formatIpDetail(actorInfo.ipDetail)}
+💻 Device: ${actorInfo.device || 'Unknown'} / ${actorInfo.os || 'Unknown'}
+${formatDualTime(new Date().toISOString(), actorInfo.timezone)}`;
 }
 
 // Template untuk notifikasi perubahan role
