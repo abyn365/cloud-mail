@@ -248,13 +248,45 @@ ${formatDualTime(new Date().toISOString(), userInfo.timezone)}`;
 
 // Template untuk webhook role management (create/update/delete/set default)
 export function roleManageMsgTemplate(action, roleInfo, actorInfo, extra = '') {
+	const actorRoleName = actorInfo?.role?.name || 'Unknown';
+	let sendLimit = 'Unauthorized';
+	if (roleInfo?.canSendEmail !== false) {
+		if (roleInfo?.sendType === 'day' || roleInfo?.sendType === 'count') {
+			sendLimit = roleInfo.sendCount > 0
+				? `${roleInfo.sendCount}${roleInfo.sendType === 'day' ? '/day' : ' total'}`
+				: 'Unlimited';
+		} else if (roleInfo?.sendType === 'ban') {
+			sendLimit = 'Banned';
+		} else if (roleInfo?.sendType === 'internal') {
+			sendLimit = 'Internal only';
+		} else {
+			sendLimit = 'Unlimited';
+		}
+	}
+
+	let addressLimit = 'Unauthorized';
+	if (roleInfo?.canAddAddress !== false) {
+		addressLimit = roleInfo?.accountCount > 0 ? `${roleInfo.accountCount}` : 'Unlimited';
+	}
+
+	const actionTextMap = {
+		ROLE_CREATED: 'created role',
+		ROLE_UPDATED: 'updated role',
+		ROLE_DELETED: 'deleted role',
+		ROLE_SET_DEFAULT: 'set default role'
+	};
+	const actionText = actionTextMap[action] || action.toLowerCase();
+
 	return `🛡️ <b>Role Management</b>
 
-🧩 Action: <b>${action}</b>
-🎭 Role: <b>${roleInfo?.name || 'Unknown'}</b>
-🆔 Role ID: <code>${roleInfo?.roleId ?? '-'}</code>${extra ? `
+🧩 Action: ${action}
+👤 Actor: <code>${actorInfo.email}</code>
+👤 Actor role: ${actorRoleName}
+${actionText}: ${roleInfo?.name || 'Unknown'}
+🆔 Role ID: <code>${roleInfo?.roleId ?? '-'}</code>
+Send limit: ${sendLimit}
+Address limit: ${addressLimit}${extra ? `
 📌 Details: ${extra}` : ''}
-👤 Actor: <code>${actorInfo.email}</code>${formatRoleInfo(actorInfo.role)}
 📍 IP Address: <code>${actorInfo.activeIp}</code>${formatIpDetail(actorInfo.ipDetail)}
 💻 Device: ${actorInfo.device || 'Unknown'} / ${actorInfo.os || 'Unknown'}
 ${formatDualTime(new Date().toISOString(), actorInfo.timezone)}`;

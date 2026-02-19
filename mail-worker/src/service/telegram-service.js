@@ -309,6 +309,9 @@ const telegramService = {
 		actorInfo.timezone = await timezoneUtils.getTimezone(c, actorInfo.activeIp);
 		await this.setIpDetailContext(c, actorInfo);
 		actorInfo.role = await this.attachRolePermInfo(c, actorInfo.role);
+		if (roleInfo?.roleId !== undefined && roleInfo?.roleId !== null) {
+			roleInfo = await this.attachRolePermInfo(c, roleInfo);
+		}
 		await this.sendTelegramMessage(c, roleManageMsgTemplate(action, roleInfo, actorInfo, extra));
 	},
 
