@@ -1174,7 +1174,7 @@ Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 			inline_keyboard: [
 				...securityButtons,
 				...blacklistButtons,
-				[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }],
+				[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🔑 Keywords', callback_data: 'cmd:keyword' }],
 				[{ text: '🏠 Menu', callback_data: 'cmd:menu' }]
 			]
 		};
@@ -1864,6 +1864,91 @@ ${historyText}`;
 		}
 	},
 
+	// ─── SECURITY: KEYWORD BLACKLIST MANAGEMENT ──────────────────────────────
+
+	async formatSecurityKeywordCommand(c, subArg, keywordArg) {
+		const sub = String(subArg || 'list').toLowerCase();
+		const keyword = String(keywordArg || '').trim().toLowerCase();
+
+		try {
+			await c.env.db.prepare(`
+				CREATE TABLE IF NOT EXISTS ban_keyword (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					keyword TEXT UNIQUE NOT NULL,
+					create_time TEXT DEFAULT (datetime('now'))
+				)
+			`).run();
+		} catch (e) {}
+
+		const backMarkup = { inline_keyboard: [[{ text: '🔑 Keyword List', callback_data: 'cmd:keyword' }, { text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+
+		if (sub === 'add') {
+			if (!keyword) return {
+				text: `🔑 Usage: <code>/security keyword add judi</code>`,
+				replyMarkup: backMarkup
+			};
+			if (keyword.length < 2) return {
+				text: `❌ Keyword terlalu pendek (min 2 karakter).`,
+				replyMarkup: backMarkup
+			};
+			try {
+				const existing = await c.env.db.prepare('SELECT id FROM ban_keyword WHERE lower(keyword) = ?').bind(keyword).first();
+				if (existing) return {
+					text: `⚠️ Keyword <code>${this.escapeHtml(keyword)}</code> sudah ada.`,
+					replyMarkup: backMarkup
+				};
+				await c.env.db.prepare(`INSERT INTO ban_keyword (keyword, create_time) VALUES (?, datetime('now'))`).bind(keyword).run();
+				await this.logSystemEvent(c, 'admin.keyword.add', EVENT_LEVEL.WARN, `Keyword added: "${keyword}"`, { keyword });
+				return {
+					text: `✅ <b>Keyword ditambahkan:</b> <code>${this.escapeHtml(keyword)}</code>\n\nEmail yang mengandung kata ini di subject/body akan diblokir secara diam-diam.`,
+					replyMarkup: backMarkup
+				};
+			} catch (e) {
+				return { text: `❌ Gagal menambahkan keyword: ${e.message}`, replyMarkup: backMarkup };
+			}
+		}
+
+		if (sub === 'remove') {
+			if (!keyword) return {
+				text: `🔑 Usage: <code>/security keyword remove judi</code>`,
+				replyMarkup: backMarkup
+			};
+			try {
+				const res = await c.env.db.prepare('DELETE FROM ban_keyword WHERE lower(keyword) = ?').bind(keyword).run();
+				if (!res.meta?.changes) return {
+					text: `⚠️ Keyword <code>${this.escapeHtml(keyword)}</code> tidak ditemukan.`,
+					replyMarkup: backMarkup
+				};
+				await this.logSystemEvent(c, 'admin.keyword.remove', EVENT_LEVEL.INFO, `Keyword removed: "${keyword}"`, { keyword });
+				return {
+					text: `✅ <b>Keyword dihapus:</b> <code>${this.escapeHtml(keyword)}</code>`,
+					replyMarkup: backMarkup
+				};
+			} catch (e) {
+				return { text: `❌ Gagal menghapus keyword: ${e.message}`, replyMarkup: backMarkup };
+			}
+		}
+
+		// List
+		try {
+			const rows = await c.env.db.prepare('SELECT id, keyword, create_time as createTime FROM ban_keyword ORDER BY id DESC LIMIT 30').all();
+			const items = rows?.results || [];
+			const body = items.length
+				? items.map(r => `🔑 <code>${this.escapeHtml(r.keyword)}</code> — added ${r.createTime || '-'}`).join('\n')
+				: '✅ Keyword list is empty.';
+
+			return {
+				text: `🔑 <b>Keyword Blacklist</b>\n\n${body}\n\n<b>Commands:</b>\n• <code>/security keyword add judi</code>\n• <code>/security keyword add gacor</code>\n• <code>/security keyword remove judi</code>\n\n<i>Dicek di: subject + body email (case-insensitive)</i>`,
+				replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			};
+		} catch (e) {
+			return {
+				text: `🔑 <b>Keyword Blacklist</b>\n\nError: ${e.message}`,
+				replyMarkup: backMarkup
+			};
+		}
+	},
+
 	// ─── NEW NOTIFICATION: PASSWORD CHANGE ALERT ──────────────────────────────
 
 	async sendPasswordChangeNotification(c, userInfo, changeType = 'change') {
@@ -1946,6 +2031,9 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 • <code>/security blacklist add spammer@evil.com</code>
 • <code>/security blacklist add evil.com</code>
 • <code>/security blacklist remove spammer@evil.com</code>
+• <code>/security keyword add judi</code>
+• <code>/security keyword add gacor</code>
+• <code>/security keyword remove judi</code>
 
 🔎 <b>Search</b>
 • <code>/search user abyn@abyn.xyz</code>
@@ -1987,6 +2075,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 			case '/security':
 				if (args?.[0] === 'event') return await this.formatSecurityEventDetailCommand(c, args?.[1]);
 				if (args?.[0] === 'blacklist') return await this.formatSecurityBlacklistCommand(c, args?.[1], args?.[2]);
+				if (args?.[0] === 'keyword') return await this.formatSecurityKeywordCommand(c, args?.[1], args?.[2]);
 				return await this.formatSecurityCommand(c);
 			case '/whois':
 				return await this.formatWhoisCommand(c, args?.[0]);
@@ -2069,6 +2158,8 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 					command = isBanned ? '/unban' : '/ban'; args = [String(uid)];
 				} else if (callback.data === 'cmd:blacklist') {
 					command = '/security'; args = ['blacklist'];
+				} else if (callback.data === 'cmd:keyword') {
+					command = '/security'; args = ['keyword'];
 				} else if (callback.data === 'cmd:stats:top') {
 					command = '/stats'; args = ['top'];
 				} else if (callback.data === 'cmd:stats:bounce') {
