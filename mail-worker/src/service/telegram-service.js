@@ -101,6 +101,25 @@ const telegramService = {
 		return roleInfo.accountCount > 0 ? `${roleInfo.accountCount}` : 'Unlimited';
 	},
 
+	escapeHtml(value) {
+		return String(value ?? '')
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
+	},
+
+	normalizeBlacklistTarget(rawTarget) {
+		const target = String(rawTarget || '').trim().toLowerCase();
+		if (!target) return null;
+		const emailPattern = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i;
+		const domainPattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i;
+		if (emailPattern.test(target)) return target;
+		if (domainPattern.test(target)) return target;
+		return null;
+	},
+
 	// ─── CORE TG ──────────────────────────────────────────────────────────────
 
 	async getEmailContent(c, params) {
@@ -291,6 +310,15 @@ const telegramService = {
 		const message = ipSecurityMsgTemplate(userInfo, ipDetail);
 		await this.emitWebhookEvent(c, 'security.ip_changed', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp, vpn: ipDetail?.security?.vpn || false });
 		await this.sendSecurityEventAlert(c, `IP changed: <code>${userInfo?.activeIp || '-'}</code>`, `User: ${userInfo?.email || '-'} (#${userInfo?.userId || '-'})`);
+		const risk = ipDetail?.security || {};
+		if (risk.vpn || risk.proxy || risk.tor || risk.relay) {
+			await this.sendSecurityEventAlert(
+				c,
+				`Risky IP detected: <code>${userInfo?.activeIp || '-'}</code>`,
+				`User: ${userInfo?.email || '-'} (#${userInfo?.userId || '-'})\nvpn=${risk.vpn ? 'Y' : 'N'} proxy=${risk.proxy ? 'Y' : 'N'} tor=${risk.tor ? 'Y' : 'N'} relay=${risk.relay ? 'Y' : 'N'}`,
+				'cmd:security'
+			);
+		}
 	},
 
 	async sendRegKeyManageNotification(c, action, regKeyInfo, actorInfo, extraInfo = {}) {
@@ -510,7 +538,7 @@ const telegramService = {
 
 	async sendTelegramReply(c, chatId, message, replyMarkup = null) {
 		const tgBotToken = await this.getBotToken(c);
-		if (!tgBotToken) return;
+		if (!tgBotToken) return null;
 		const payload = { chat_id: String(chatId), parse_mode: 'HTML', text: message };
 		if (replyMarkup) payload.reply_markup = replyMarkup;
 		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
@@ -518,7 +546,12 @@ const telegramService = {
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(payload)
 		});
-		if (!res.ok) console.error(`Failed to send Telegram bot reply status: ${res.status} response: ${await res.text()}`);
+		const data = await res.json().catch(() => null);
+		if (!res.ok) {
+			console.error(`Failed to send Telegram bot reply status: ${res.status} response: ${JSON.stringify(data)}`);
+			return null;
+		}
+		return data?.result || null;
 	},
 
 	async editTelegramReply(c, chatId, messageId, message, replyMarkup = null) {
@@ -546,6 +579,55 @@ const telegramService = {
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ callback_query_id: callbackQueryId })
 		});
+	},
+
+	async ensureChatStateTable(c) {
+		await c.env.db.prepare(`
+			CREATE TABLE IF NOT EXISTS tg_chat_state (
+				chat_id TEXT PRIMARY KEY,
+				last_bot_message_id INTEGER,
+				update_time TEXT DEFAULT (datetime('now'))
+			)
+		`).run();
+	},
+
+	async getLastBotMessageId(c, chatId) {
+		try {
+			await this.ensureChatStateTable(c);
+			const row = await c.env.db.prepare('SELECT last_bot_message_id as messageId FROM tg_chat_state WHERE chat_id = ?').bind(String(chatId)).first();
+			return row?.messageId || null;
+		} catch (e) {
+			console.error('Failed to load tg_chat_state:', e.message);
+			return null;
+		}
+	},
+
+	async saveLastBotMessageId(c, chatId, messageId) {
+		if (!chatId || !messageId) return;
+		try {
+			await this.ensureChatStateTable(c);
+			await c.env.db.prepare(`
+				INSERT INTO tg_chat_state (chat_id, last_bot_message_id, update_time)
+				VALUES (?, ?, datetime('now'))
+				ON CONFLICT(chat_id) DO UPDATE SET
+					last_bot_message_id = excluded.last_bot_message_id,
+					update_time = excluded.update_time
+			`).bind(String(chatId), Number(messageId)).run();
+		} catch (e) {
+			console.error('Failed to save tg_chat_state:', e.message);
+		}
+	},
+
+	async sendOrEditSingleChatMessage(c, chatId, message, replyMarkup = null) {
+		const previousMessageId = await this.getLastBotMessageId(c, chatId);
+		if (previousMessageId) {
+			const edited = await this.editTelegramReply(c, chatId, previousMessageId, message, replyMarkup);
+			if (edited) return { messageId: previousMessageId, edited: true };
+		}
+		const sent = await this.sendTelegramReply(c, chatId, message, replyMarkup);
+		const messageId = sent?.message_id;
+		if (messageId) await this.saveLastBotMessageId(c, chatId, messageId);
+		return { messageId: messageId || null, edited: false };
 	},
 
 	// FIX #5: Helper untuk menghapus pesan user (command manual) agar tidak memenuhi layar
@@ -1635,8 +1717,8 @@ ${historyText}`;
 	async formatSecurityBlacklistCommand(c, subArg, targetArg) {
 		const sub = String(subArg || 'list').toLowerCase();
 		const target = String(targetArg || '').trim();
+		const normalizedTarget = this.normalizeBlacklistTarget(target);
 
-		// Buat tabel jika belum ada
 		try {
 			await c.env.db.prepare(`
 				CREATE TABLE IF NOT EXISTS ban_email (
@@ -1646,7 +1728,6 @@ ${historyText}`;
 				)
 			`).run();
 		} catch (e) {
-			// Tabel mungkin sudah ada, abaikan
 		}
 
 		if (sub === 'add' || sub === 'remove') {
@@ -1654,18 +1735,23 @@ ${historyText}`;
 				text: `🚫 Usage: <code>/security blacklist ${sub} email@example.com</code>`,
 				replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
 			};
+			if (!normalizedTarget) return {
+				text: '❌ Invalid target. Use a valid email (user@ex.com) or domain (example.com).',
+				replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			};
+			const safeTarget = this.escapeHtml(normalizedTarget);
 
 			if (sub === 'add') {
 				try {
-					const existing = await c.env.db.prepare('SELECT id FROM ban_email WHERE email = ?').bind(target).first();
+					const existing = await c.env.db.prepare('SELECT id FROM ban_email WHERE lower(email) = ?').bind(normalizedTarget).first();
 					if (existing) return {
-						text: `🚫 <code>${target}</code> is already blacklisted.`,
+						text: `🚫 <code>${safeTarget}</code> is already blacklisted.`,
 						replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
 					};
-					await c.env.db.prepare("INSERT INTO ban_email (email, create_time) VALUES (?, datetime('now'))").bind(target).run();
-					await this.logSystemEvent(c, 'admin.blacklist.add', EVENT_LEVEL.WARN, `Blacklisted: ${target}`, { email: target });
+					await c.env.db.prepare("INSERT INTO ban_email (email, create_time) VALUES (?, datetime('now'))").bind(normalizedTarget).run();
+					await this.logSystemEvent(c, 'admin.blacklist.add', EVENT_LEVEL.WARN, `Blacklisted: ${normalizedTarget}`, { email: normalizedTarget });
 					return {
-						text: `✅ <b>Blacklisted</b> <code>${target}</code>`,
+						text: `✅ <b>Blacklisted</b> <code>${safeTarget}</code>`,
 						replyMarkup: { inline_keyboard: [[{ text: '🚫 View Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
 					};
 				} catch (e) {
@@ -1673,14 +1759,14 @@ ${historyText}`;
 				}
 			} else {
 				try {
-					const res = await c.env.db.prepare('DELETE FROM ban_email WHERE email = ?').bind(target).run();
+					const res = await c.env.db.prepare('DELETE FROM ban_email WHERE lower(email) = ?').bind(normalizedTarget).run();
 					if (!res.meta?.changes) return {
-						text: `⚠️ <code>${target}</code> not found in blacklist.`,
+						text: `⚠️ <code>${safeTarget}</code> not found in blacklist.`,
 						replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
 					};
-					await this.logSystemEvent(c, 'admin.blacklist.remove', EVENT_LEVEL.INFO, `Removed from blacklist: ${target}`, { email: target });
+					await this.logSystemEvent(c, 'admin.blacklist.remove', EVENT_LEVEL.INFO, `Removed from blacklist: ${normalizedTarget}`, { email: normalizedTarget });
 					return {
-						text: `✅ <b>Removed from blacklist</b>: <code>${target}</code>`,
+						text: `✅ <b>Removed from blacklist</b>: <code>${safeTarget}</code>`,
 						replyMarkup: { inline_keyboard: [[{ text: '🚫 View Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
 					};
 				} catch (e) {
@@ -1689,16 +1775,15 @@ ${historyText}`;
 			}
 		}
 
-		// List view
 		try {
 			const rows = await c.env.db.prepare('SELECT id, email, create_time as createTime FROM ban_email ORDER BY id DESC LIMIT 20').all();
 			const items = rows?.results || [];
 			const body = items.length
-				? items.map(r => `🚫 <code>${r.email}</code> — added ${r.createTime || '-'}`).join('\n')
+				? items.map(r => `🚫 <code>${this.escapeHtml(r.email)}</code> — added ${r.createTime || '-'}`).join('\n')
 				: '✅ Blacklist is empty.';
 
 			return {
-				text: `🚫 <b>Email Blacklist</b>\n\n${body}\n\n<b>Commands:</b>\n• <code>/security blacklist add email@ex.com</code>\n• <code>/security blacklist remove email@ex.com</code>`,
+				text: `🚫 <b>Email Blacklist</b>\n\n${body}\n\n<b>Commands:</b>\n• <code>/security blacklist add email@ex.com</code>\n• <code>/security blacklist add domain.com</code>\n• <code>/security blacklist remove email@ex.com</code>`,
 				replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
 			};
 		} catch (e) {
@@ -1748,36 +1833,31 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 			case '/start':
 			case '/help':
 				return {
-					text: `🤖 <b>Cloud Mail Bot Command Center</b>
+					text: `🤖 <b>Cloud Mail Bot Commands</b>
 
-📊 <b>/status</b> — system counters + bot state
-👥 <b>/users [page]</b> — users with quota info
-📨 <b>/mail [page|emailId]</b> — emails with pager or detail
-📬 <b>/recent</b> — last 10 emails across all users
-🛡️ <b>/role</b> — role quota + authorization flags
-🔐 <b>/security</b> — risky IPs, failed logins, blacklist
-🌐 <b>/whois &lt;ip&gt;</b> — IP intelligence lookup
-📈 <b>/stats [range|top|bounce]</b> — e.g. <code>/stats 7d</code>
-🧭 <b>/system</b> — webhook health + logs
-🗂 <b>/events [page]</b> — webhook/system event log
-🧾 <b>/event &lt;id&gt;</b> — event detail + preview
-👤 <b>/user &lt;id&gt;</b> — user detail with role, quota, progress bars
-📧 <b>/usermail &lt;userId&gt; [page]</b> — list a user's emails
-🔄 <b>/resetquota &lt;userId&gt;</b> — reset user send quota to 0
-🎟️ <b>/invite [page]</b> — invite codes with usage history
-🔎 <b>/search [type] [query]</b> — search user/email/invite/role/ip
-🚫 <b>/ban &lt;userId&gt;</b> — ban a user
-✅ <b>/unban &lt;userId&gt;</b> — unban a user
-🆔 <b>/chatid</b> — your chat_id/user_id
+help - show commands
+status - bot info
+system - system status
+search - quick search system
+security - show suspicious activity
+events - show events
+whois - search ip
+stats - view stats
+mail - all mail info
+users - users info
+role - roles info
+invite - invite code info
+chatid - get chat id
 
-<b>Examples:</b>
-• <code>/user 1</code>
-• <code>/usermail 5 2</code>
-• <code>/resetquota 5</code>
-• <code>/stats top</code>  <code>/stats bounce</code>  <code>/stats 14d</code>
-• <code>/security blacklist add spammer@evil.com</code>
-• <code>/search user abyn@abyn.xyz</code>
-• <code>/ban 5</code>`,
+🌐 <b>/whois</b>
+Usage: <code>/whois 1.1.1.1</code>
+
+🔐 <b>/security</b>
+• <code>/security</code>
+• <code>/security event &lt;id&gt;</code>
+• <code>/security blacklist add email@ex.com</code>
+• <code>/security blacklist add domain.com</code>
+• <code>/security blacklist remove email@ex.com</code>`,
 					replyMarkup: this.buildMainMenu()
 				};
 			case '/recent':
@@ -1925,7 +2005,8 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 
 			const result = await this.resolveCommand(c, command, args, chatId, userId);
 			const edited = await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
-			if (!edited) await this.sendTelegramReply(c, chatId, result.text, result.replyMarkup);
+			if (edited) await this.saveLastBotMessageId(c, chatId, callback.message.message_id);
+			if (!edited) await this.sendOrEditSingleChatMessage(c, chatId, result.text, result.replyMarkup);
 			return;
 		}
 
@@ -1957,7 +2038,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 		if (reply.length > 3800) reply = `${reply.slice(0, 3800)}\n\n...truncated`;
 
 		// FIX #5: Kirim balasan bot dulu, lalu hapus pesan command user
-		await this.sendTelegramReply(c, chatId, reply, result.replyMarkup);
+		await this.sendOrEditSingleChatMessage(c, chatId, reply, result.replyMarkup);
 
 		// Hapus pesan command user agar tidak memenuhi layar
 		// Hanya hapus jika bukan channel post (channel tidak bisa dihapus oleh bot)
