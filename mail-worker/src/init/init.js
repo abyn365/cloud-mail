@@ -29,8 +29,25 @@ const dbInit = {
 		await this.v2_8DB(c);
 		await this.v2_9DB(c);
 		await this.v3_0DB(c);
+		await this.v3_1DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
+	},
+
+
+	async v3_1DB(c) {
+		try {
+			await c.env.db.prepare(`CREATE TABLE IF NOT EXISTS webhook_event_log (
+				log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				event_type TEXT NOT NULL,
+				level TEXT NOT NULL DEFAULT 'info',
+				message TEXT NOT NULL DEFAULT '',
+				meta TEXT,
+				create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+			)`).run();
+		} catch (e) {
+			console.warn(`跳过字段：${e.message}`);
+		}
 	},
 
 
