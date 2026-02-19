@@ -1,13 +1,15 @@
 import orm from '../entity/orm';
 import email from '../entity/email';
 import role from '../entity/role';
+import user from '../entity/user';
+import regKey from '../entity/reg-key';
 import settingService from './setting-service';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 dayjs.extend(utc);
 dayjs.extend(timezone);
-import { eq } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import jwtUtils from '../utils/jwt-utils';
 import timezoneUtils from '../utils/timezone-utils';
 import emailMsgTemplate, {
@@ -33,6 +35,7 @@ import emailMsgTemplate, {
 import emailTextTemplate from '../template/email-text';
 import emailHtmlTemplate from '../template/email-html';
 import domainUtils from '../utils/domain-uitls';
+import analysisDao from '../dao/analysis-dao';
 
 const telegramService = {
 
@@ -328,7 +331,186 @@ const telegramService = {
 	async sendQuotaWarningNotification(c, userInfo, quotaType) {
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		await this.sendTelegramMessage(c, quotaWarningMsgTemplate(userInfo, quotaType));
-	}
+	},
+
+	parseAllowedChatIds(c) {
+		const raw = c.env.CHAT_ID || '';
+		return String(raw)
+			.split(',')
+			.map(item => item.trim())
+			.filter(Boolean);
+	},
+
+	isAllowedChat(c, chatId) {
+		const allowed = this.parseAllowedChatIds(c);
+		if (allowed.length === 0) {
+			return false;
+		}
+		return allowed.includes(String(chatId));
+	},
+
+	async sendTelegramReply(c, chatId, message) {
+		const { tgBotToken } = await settingService.query(c);
+		if (!tgBotToken) return;
+		const payload = {
+			chat_id: String(chatId),
+			parse_mode: 'HTML',
+			text: message,
+		};
+		await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload)
+		});
+	},
+
+	async formatMailCommand(c) {
+		const rows = await orm(c).select({
+			emailId: email.emailId,
+			sendEmail: email.sendEmail,
+			toEmail: email.toEmail,
+			subject: email.subject,
+			type: email.type,
+			isDel: email.isDel,
+			createTime: email.createTime,
+		}).from(email).orderBy(desc(email.emailId)).limit(20);
+
+		if (rows.length === 0) return `📭 <b>/mail</b>
+No email data.`;
+		const body = rows.map(item => `🆔 <code>${item.emailId}</code> | ${item.type === 0 ? 'RECV' : 'SEND'} | del=${item.isDel}
+From: <code>${item.sendEmail || '-'}</code>
+To: <code>${item.toEmail || '-'}</code>
+Subj: ${item.subject || '-'}
+At: ${item.createTime}`).join('
+
+');
+		return `📨 <b>/mail</b> (last 20)
+
+${body}`;
+	},
+
+	async formatUsersCommand(c) {
+		const rows = await orm(c).select({
+			userId: user.userId,
+			email: user.email,
+			status: user.status,
+			isDel: user.isDel,
+			type: user.type,
+			sendCount: user.sendCount,
+			createTime: user.createTime,
+		}).from(user).orderBy(desc(user.userId)).limit(20);
+		if (rows.length === 0) return `👤 <b>/users</b>
+No user data.`;
+		const roleRows = await orm(c).select().from(role);
+		const map = new Map(roleRows.map(r => [r.roleId, r.name]));
+		const body = rows.map(item => `🆔 <code>${item.userId}</code> ${item.email}
+Role: ${map.get(item.type) || (item.type === 0 ? 'admin' : 'unknown')} | Status: ${item.status} | Deleted: ${item.isDel}
+Send Count: ${item.sendCount || 0} | Created: ${item.createTime || '-'}`).join('
+
+');
+		return `👥 <b>/users</b> (first 20)
+
+${body}`;
+	},
+
+	async formatRoleCommand(c) {
+		const rows = await orm(c).select().from(role);
+		if (rows.length === 0) return `🛡️ <b>/role</b>
+No role data.`;
+		const body = rows.map(item => `🆔 <code>${item.roleId}</code> ${item.name}
+Send: ${item.sendType || '-'} / ${item.sendCount ?? 'Unlimited'}
+Address limit: ${item.accountCount ?? 'Unlimited'}
+Default: ${item.isDefault ? 'Yes' : 'No'}
+Ban email: ${item.banEmail || '-'}
+Avail domain: ${item.availDomain || '-'}`).join('
+
+');
+		return `🛡️ <b>/role</b>
+
+${body}`;
+	},
+
+	async formatInviteCommand(c) {
+		const rows = await orm(c).select({
+			regKeyId: regKey.regKeyId,
+			code: regKey.code,
+			count: regKey.count,
+			roleId: regKey.roleId,
+			expireTime: regKey.expireTime,
+			createTime: regKey.createTime,
+		}).from(regKey).orderBy(desc(regKey.regKeyId)).limit(30);
+		if (rows.length === 0) return `🎟️ <b>/invite</b>
+No invite code data.`;
+		const roleRows = await orm(c).select().from(role);
+		const map = new Map(roleRows.map(r => [r.roleId, r.name]));
+		const body = rows.map(item => `🆔 <code>${item.regKeyId}</code> <code>${item.code}</code>
+Role: ${map.get(item.roleId) || item.roleId}
+Remaining: ${item.count} | Expire: ${item.expireTime || '-'}
+Created: ${item.createTime || '-'}`).join('
+
+');
+		return `🎟️ <b>/invite</b>
+
+${body}`;
+	},
+
+	async formatStatusCommand(c) {
+		const numberCount = await analysisDao.numberCount(c);
+		const allowed = this.parseAllowedChatIds(c);
+		const botEnabled = Boolean((await settingService.query(c)).tgBotToken);
+		return `📊 <b>/status</b>
+
+Users: ${numberCount.userCount}
+Accounts: ${numberCount.accountCount}
+Receive Emails: ${numberCount.receiveEmailCount}
+Send Emails: ${numberCount.sendEmailCount}
+
+🤖 Bot enabled: ${botEnabled ? 'Yes' : 'No'}
+🔐 Allowed CHAT_ID: ${allowed.length > 0 ? allowed.join(', ') : '(empty)'}`;
+	},
+
+	async handleBotWebhook(c, body) {
+		const message = body?.message;
+		const text = message?.text?.trim();
+		const chatId = message?.chat?.id;
+		if (!text || !chatId) {
+			return;
+		}
+
+		if (!this.isAllowedChat(c, chatId)) {
+			await this.sendTelegramReply(c, chatId, '⛔ Unauthorized');
+			return;
+		}
+
+		let reply = '';
+		switch (text.split(' ')[0]) {
+			case '/mail':
+				reply = await this.formatMailCommand(c);
+				break;
+			case '/users':
+				reply = await this.formatUsersCommand(c);
+				break;
+			case '/role':
+				reply = await this.formatRoleCommand(c);
+				break;
+			case '/invite':
+				reply = await this.formatInviteCommand(c);
+				break;
+			case '/status':
+				reply = await this.formatStatusCommand(c);
+				break;
+			default:
+				reply = `📌 Commands:
+/mail
+/users
+/role
+/invite
+/status`;
+		}
+
+		await this.sendTelegramReply(c, chatId, reply);
+	},
+
 };
 
 export default telegramService;
