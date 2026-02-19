@@ -235,8 +235,50 @@ const emailService = {
 			if(!roleService.hasAvailDomainPerm(roleRow.availDomain, accountRow.email)) {
 				throw new BizError(t('noDomainPermSend'),403)
 			}
-
 		}
+
+		// ─── OUTBOUND FILTER: blacklist + keyword ────────────────────────────
+		// Berlaku untuk SEMUA user termasuk mail service user biasa.
+		// Cek dilakukan per-alamat tujuan agar error message lebih spesifik.
+		// Jika blocked:
+		//   - Log silent ke security board (/security) dengan data actor lengkap
+		//   - Throw BizError 422 → frontend menampilkan toast error
+		for (const toAddr of receiveEmail) {
+			const filterResult = await telegramService.checkOutboundFilter(c, {
+				toEmail: toAddr,
+				subject: subject,
+				bodyText: text || ''
+			});
+
+			if (filterResult.blocked) {
+				// Log ke ban_email_log + webhook_event_log (event: security.outbound.blocked)
+				// Muncul di /security dashboard dengan label [OUT] + tombol 🔎 Preview
+				await telegramService.logOutboundBlocked(c, {
+					actorUser: {
+						email: userRow.email,
+						userId: userRow.userId,
+						activeIp: userRow.activeIp || c.req.header('CF-Connecting-IP') || '',
+						roleLabel: roleRow?.name || `type ${userRow.type}`
+					},
+					toEmail: toAddr,
+					subject: subject,
+					bodyText: text || '',
+					matchedRule: filterResult.matchedRule,
+					reason: filterResult.reason
+				});
+
+				// Pesan error yang akan ditampilkan sebagai notifikasi di website
+				// (seperti notifikasi sukses tapi untuk error)
+				const reasonMsg = filterResult.reason === 'keyword'
+					? `Email blocked: Email contains forbidden words (${filterResult.matchedRule})`
+					: `Email blocked: Address is blacklisted (${filterResult.matchedRule})`;
+
+				// HTTP 422 — ditangkap global error handler hono.js
+				// Response: { success: false, message: "...", code: 422 }
+				throw new BizError(reasonMsg, 422);
+			}
+		}
+		// ─── END OUTBOUND FILTER ─────────────────────────────────────────────
 
 		const domain = emailUtils.getDomain(accountRow.email);
 		const resendToken = resendTokens[domain];
