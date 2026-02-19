@@ -348,16 +348,25 @@ const telegramService = {
 		await this.sendTelegramMessage(c, quotaWarningMsgTemplate(userInfo, quotaType));
 	},
 
-	parseAllowedChatIds(c) {
-		const raw = c.env.CHAT_ID || c.env.TG_CHAT_ID || c.env.tgChatId || '';
-		return String(raw)
+	async parseAllowedChatIds(c) {
+		const envValue = c.env.CHAT_ID || c.env.TG_CHAT_ID || c.env.tgChatId;
+		let raw = envValue;
+		if (!raw) {
+			try {
+				const setting = await settingService.query(c);
+				raw = setting?.tgChatId;
+			} catch (e) {
+				console.error('Failed to load tgChatId from setting:', e.message);
+			}
+		}
+		return String(raw || '')
 			.split(',')
 			.map(item => item.trim())
 			.filter(Boolean);
 	},
 
-	isAllowedChat(c, chatId, userId) {
-		const allowed = this.parseAllowedChatIds(c);
+	async isAllowedChat(c, chatId, userId) {
+		const allowed = await this.parseAllowedChatIds(c);
 		if (allowed.length === 0) {
 			return false;
 		}
@@ -366,6 +375,49 @@ const telegramService = {
 		return allowed.includes(chatIdStr) || (userIdStr && allowed.includes(userIdStr));
 	},
 
+
+	buildWebhookUrl(c) {
+		const url = new URL(c.req.url);
+		url.pathname = '/api/telegram/webhook';
+		url.search = '';
+		url.hash = '';
+		return url.toString();
+	},
+
+	async getWebhookInfo(c) {
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken) {
+			return { ok: false, description: 'Bot token is empty' };
+		}
+		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/getWebhookInfo`);
+		const data = await res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
+		return data;
+	},
+
+	async setWebhook(c) {
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken) {
+			return { ok: false, description: 'Bot token is empty' };
+		}
+		const webhookUrl = this.buildWebhookUrl(c);
+		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/setWebhook`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ url: webhookUrl, allowed_updates: ['message', 'edited_message', 'channel_post'] })
+		});
+		const data = await res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
+		return { ...data, webhookUrl };
+	},
+
+	async deleteWebhook(c) {
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken) {
+			return { ok: false, description: 'Bot token is empty' };
+		}
+		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/deleteWebhook`);
+		const data = await res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
+		return data;
+	},
 	async sendTelegramReply(c, chatId, message) {
 		const tgBotToken = await this.getBotToken(c);
 		if (!tgBotToken) return;
@@ -384,7 +436,9 @@ const telegramService = {
 		}
 	},
 
-	async formatMailCommand(c) {
+	async formatMailCommand(c, page = 1) {
+		const pageSize = 20;
+		const currentPage = Math.max(1, Number(page) || 1);
 		const rows = await orm(c).select({
 			emailId: email.emailId,
 			sendEmail: email.sendEmail,
@@ -393,7 +447,7 @@ const telegramService = {
 			type: email.type,
 			isDel: email.isDel,
 			createTime: email.createTime,
-		}).from(email).orderBy(desc(email.emailId)).limit(20);
+		}).from(email).orderBy(desc(email.emailId)).limit(pageSize).offset((currentPage - 1) * pageSize);
 
 		if (rows.length === 0) return `📭 <b>/mail</b>
 No email data.`;
@@ -402,12 +456,14 @@ From: <code>${item.sendEmail || '-'}</code>
 To: <code>${item.toEmail || '-'}</code>
 Subj: ${item.subject || '-'}
 At: ${item.createTime}`).join('\n\n');
-		return `📨 <b>/mail</b> (last 20)
+		return `📨 <b>/mail</b> (page ${currentPage})
 
 ${body}`;
 	},
 
-	async formatUsersCommand(c) {
+	async formatUsersCommand(c, page = 1) {
+		const pageSize = 20;
+		const currentPage = Math.max(1, Number(page) || 1);
 		const rows = await orm(c).select({
 			userId: user.userId,
 			email: user.email,
@@ -416,7 +472,7 @@ ${body}`;
 			type: user.type,
 			sendCount: user.sendCount,
 			createTime: user.createTime,
-		}).from(user).orderBy(desc(user.userId)).limit(20);
+		}).from(user).orderBy(desc(user.userId)).limit(pageSize).offset((currentPage - 1) * pageSize);
 		if (rows.length === 0) return `👤 <b>/users</b>
 No user data.`;
 		const roleRows = await orm(c).select().from(role);
@@ -424,7 +480,7 @@ No user data.`;
 		const body = rows.map(item => `🆔 <code>${item.userId}</code> ${item.email}
 Role: ${map.get(item.type) || (item.type === 0 ? 'admin' : 'unknown')} | Status: ${item.status} | Deleted: ${item.isDel}
 Send Count: ${item.sendCount || 0} | Created: ${item.createTime || '-'}`).join('\n\n');
-		return `👥 <b>/users</b> (first 20)
+		return `👥 <b>/users</b> (page ${currentPage})
 
 ${body}`;
 	},
@@ -433,9 +489,11 @@ ${body}`;
 		const rows = await orm(c).select().from(role);
 		if (rows.length === 0) return `🛡️ <b>/role</b>
 No role data.`;
-		const body = rows.map(item => `🆔 <code>${item.roleId}</code> ${item.name}
-Send: ${item.sendType || '-'} / ${item.sendCount ?? 'Unlimited'}
-Address limit: ${item.accountCount ?? 'Unlimited'}
+		const roleRows = await Promise.all(rows.map(async item => this.attachRolePermInfo(c, { ...item })));
+		const body = roleRows.map(item => `🆔 <code>${item.roleId}</code> ${item.name}
+Send: ${item.sendType || '-'} / ${item.sendCount ?? '-'}
+Address limit: ${item.accountCount ?? '-'}
+Permission: send=${item.canSendEmail ? 'Yes' : 'No'} | add-address=${item.canAddAddress ? 'Yes' : 'No'}
 Default: ${item.isDefault ? 'Yes' : 'No'}
 Ban email: ${item.banEmail || '-'}
 Avail domain: ${item.availDomain || '-'}`).join('\n\n');
@@ -444,7 +502,9 @@ Avail domain: ${item.availDomain || '-'}`).join('\n\n');
 ${body}`;
 	},
 
-	async formatInviteCommand(c) {
+	async formatInviteCommand(c, page = 1) {
+		const pageSize = 30;
+		const currentPage = Math.max(1, Number(page) || 1);
 		const rows = await orm(c).select({
 			regKeyId: regKey.regKeyId,
 			code: regKey.code,
@@ -452,7 +512,7 @@ ${body}`;
 			roleId: regKey.roleId,
 			expireTime: regKey.expireTime,
 			createTime: regKey.createTime,
-		}).from(regKey).orderBy(desc(regKey.regKeyId)).limit(30);
+		}).from(regKey).orderBy(desc(regKey.regKeyId)).limit(pageSize).offset((currentPage - 1) * pageSize);
 		if (rows.length === 0) return `🎟️ <b>/invite</b>
 No invite code data.`;
 		const roleRows = await orm(c).select().from(role);
@@ -461,21 +521,21 @@ No invite code data.`;
 Role: ${map.get(item.roleId) || item.roleId}
 Remaining: ${item.count} | Expire: ${item.expireTime || '-'}
 Created: ${item.createTime || '-'}`).join('\n\n');
-		return `🎟️ <b>/invite</b>
+		return `🎟️ <b>/invite</b> (page ${currentPage})
 
 ${body}`;
 	},
 
 	async formatStatusCommand(c) {
 		const numberCount = await analysisDao.numberCount(c);
-		const allowed = this.parseAllowedChatIds(c);
+		const allowed = await this.parseAllowedChatIds(c);
 		const botEnabled = Boolean((await settingService.query(c)).tgBotToken);
 		return `📊 <b>/status</b>
 
-Users: ${numberCount.userCount}
-Accounts: ${numberCount.accountCount}
-Receive Emails: ${numberCount.receiveEmailCount}
-Send Emails: ${numberCount.sendEmailCount}
+Users: ${numberCount.userTotal}
+Accounts: ${numberCount.accountTotal}
+Receive Emails: ${numberCount.receiveTotal}
+Send Emails: ${numberCount.sendTotal}
 
 🤖 Bot enabled: ${botEnabled ? 'Yes' : 'No'}
 🔐 Allowed CHAT_ID: ${allowed.length > 0 ? allowed.join(', ') : '(empty)'}`;
@@ -490,8 +550,8 @@ Send Emails: ${numberCount.sendEmailCount}
 			return;
 		}
 
-		if (!this.isAllowedChat(c, chatId, userId)) {
-			const allowed = this.parseAllowedChatIds(c);
+		if (!await this.isAllowedChat(c, chatId, userId)) {
+			const allowed = await this.parseAllowedChatIds(c);
 			const msg = allowed.length === 0
 				? '⛔ Unauthorized\nReason: CHAT_ID allowlist is empty.'
 				: `⛔ Unauthorized\nAllowed: ${allowed.join(', ')}\nCurrent chat_id: ${chatId}${userId ? `\nCurrent user_id: ${userId}` : ''}`;
@@ -499,26 +559,31 @@ Send Emails: ${numberCount.sendEmailCount}
 			return;
 		}
 
-		const rawCommand = text.split(/\s+/)[0];
+		const args = text.split(/\s+/).filter(Boolean);
+		const rawCommand = args[0];
+		const pageArg = Number(args[1] || 1);
 		const command = rawCommand.includes('@') ? rawCommand.split('@')[0] : rawCommand;
 		console.log(`Telegram bot command received chat_id=${chatId} user_id=${userId || '-'} command=${command}`);
 
 		let reply = '';
 		switch (command) {
 			case '/mail':
-				reply = await this.formatMailCommand(c);
+				reply = await this.formatMailCommand(c, pageArg);
 				break;
 			case '/users':
-				reply = await this.formatUsersCommand(c);
+				reply = await this.formatUsersCommand(c, pageArg);
 				break;
 			case '/role':
 				reply = await this.formatRoleCommand(c);
 				break;
 			case '/invite':
-				reply = await this.formatInviteCommand(c);
+				reply = await this.formatInviteCommand(c, pageArg);
 				break;
 			case '/status':
 				reply = await this.formatStatusCommand(c);
+				break;
+			case '/chatid':
+				reply = `🆔 chat_id: <code>${chatId}</code>\n👤 user_id: <code>${userId || '-'}</code>`;
 				break;
 			default:
 				reply = `📌 Commands:
@@ -526,7 +591,13 @@ Send Emails: ${numberCount.sendEmailCount}
 /users
 /role
 /invite
-/status`;
+/status
+/chatid
+
+Tips:
+/mail 2  (open page 2)
+/users 3
+/invite 2`;
 		}
 
 		if (reply.length > 3800) {
