@@ -46,6 +46,75 @@ const EVENT_LEVEL = {
 
 const telegramService = {
 
+	// ─── HELPERS ──────────────────────────────────────────────────────────────
+
+	/**
+	 * Check if a user is admin based on env.admin
+	 */
+	isAdminUser(c, userEmail) {
+		return c.env.admin && userEmail && userEmail.toLowerCase() === c.env.admin.toLowerCase();
+	},
+
+	/**
+	 * Get effective role display info for a user, correctly handling admin
+	 */
+	async getEffectiveRoleDisplay(c, userRow) {
+		if (!userRow) return null;
+		if (this.isAdminUser(c, userRow.email)) {
+			return {
+				roleId: 0,
+				name: 'Admin',
+				sendType: 'unlimited',
+				sendCount: 0,
+				accountCount: 0,
+				canSendEmail: true,
+				canAddAddress: true,
+				isAdmin: true
+			};
+		}
+		const roleRow = await this.getRoleById(c, userRow.type);
+		if (!roleRow) return null;
+		return await this.attachRolePermInfo(c, { ...roleRow });
+	},
+
+	async getRoleById(c, roleId) {
+		try {
+			return await orm(c).select().from(role).where(eq(role.roleId, roleId)).get();
+		} catch (e) {
+			return null;
+		}
+	},
+
+	/**
+	 * Format send limit for display, admin-aware
+	 */
+	formatSendLimit(roleInfo) {
+		if (!roleInfo) return 'Unknown';
+		if (roleInfo.isAdmin) return 'Unlimited (Admin)';
+		if (roleInfo.canSendEmail === false) return 'Unauthorized';
+		if (roleInfo.sendType === 'ban') return '🚫 Banned';
+		if (roleInfo.sendType === 'internal') return '📨 Internal only';
+		if (roleInfo.sendType === 'day') {
+			return roleInfo.sendCount > 0 ? `${roleInfo.sendCount}/day` : 'Unlimited';
+		}
+		if (roleInfo.sendType === 'count') {
+			return roleInfo.sendCount > 0 ? `${roleInfo.sendCount} total` : 'Unlimited';
+		}
+		return 'Unlimited';
+	},
+
+	/**
+	 * Format address limit for display, admin-aware
+	 */
+	formatAddressLimit(roleInfo) {
+		if (!roleInfo) return 'Unknown';
+		if (roleInfo.isAdmin) return 'Unlimited (Admin)';
+		if (roleInfo.canAddAddress === false) return 'Unauthorized';
+		return roleInfo.accountCount > 0 ? `${roleInfo.accountCount}` : 'Unlimited';
+	},
+
+	// ─── CORE TG ──────────────────────────────────────────────────────────────
+
 	async getEmailContent(c, params) {
 		const { token } = params;
 		const result = await jwtUtils.verifyToken(c, token);
@@ -61,9 +130,7 @@ const telegramService = {
 
 	async getBotToken(c) {
 		const envToken = c.env.BOT_TOKEN || c.env.bot_token || c.env.TG_BOT_TOKEN || c.env.tgBotToken;
-		if (envToken) {
-			return envToken;
-		}
+		if (envToken) return envToken;
 		try {
 			const setting = await settingService.query(c);
 			return setting.tgBotToken;
@@ -133,15 +200,14 @@ const telegramService = {
 		await this.sendTelegramMessage(c, message, replyMarkup);
 	},
 
-
 	async attachRolePermInfo(c, roleInfo) {
 		if (!roleInfo) return roleInfo;
+		if (roleInfo.isAdmin) return roleInfo;
 		if (roleInfo.roleId === undefined || roleInfo.roleId === null) {
 			roleInfo.canSendEmail = true;
 			roleInfo.canAddAddress = true;
 			return roleInfo;
 		}
-
 		try {
 			const { results } = await c.env.db.prepare(`
 				SELECT p.perm_key as permKey
@@ -168,36 +234,27 @@ const telegramService = {
 
 	async queryIpSecurity(c, ip) {
 		if (!ip) return null;
-
 		try {
 			const cache = await c.env.db.prepare('SELECT data, update_time FROM ip_security_cache WHERE ip = ?').bind(ip).first();
 			if (cache?.data) {
 				const cacheTime = cache.update_time ? dayjs.utc(cache.update_time) : null;
 				const cacheExpired = !cacheTime || dayjs.utc().diff(cacheTime, 'hour') >= 48;
-				if (!cacheExpired) {
-					return JSON.parse(cache.data);
-				}
+				if (!cacheExpired) return JSON.parse(cache.data);
 				await c.env.db.prepare('DELETE FROM ip_security_cache WHERE ip = ?').bind(ip).run();
 			}
 		} catch (e) {
 			console.error('Failed to read ip cache:', e.message);
 			await this.logSystemEvent(c, 'security.ip_cache.read_error', EVENT_LEVEL.ERROR, e.message, { ip });
 		}
-
 		const apiKey = c.env.vpnapi_key || c.env.VPNAPI_KEY;
 		if (!apiKey) return { ip };
-
 		const today = dayjs().utc().format('YYYY-MM-DD');
 		try {
 			const usage = await c.env.db.prepare('SELECT count FROM ip_security_usage WHERE usage_date = ?').bind(today).first();
-			if ((usage?.count || 0) >= 1000) {
-				return { ip, limited: true };
-			}
+			if ((usage?.count || 0) >= 1000) return { ip, limited: true };
 		} catch (e) {
 			console.error('Failed to read ip usage:', e.message);
-			await this.logSystemEvent(c, 'security.ip_usage.read_error', EVENT_LEVEL.ERROR, e.message, { ip });
 		}
-
 		let detail = { ip };
 		try {
 			const res = await fetch(`https://vpnapi.io/api/${encodeURIComponent(ip)}?key=${encodeURIComponent(apiKey)}`);
@@ -210,10 +267,8 @@ const telegramService = {
 			detail = await res.json();
 		} catch (e) {
 			console.error('Failed to query vpnapi.io:', e.message);
-			await this.logSystemEvent(c, 'security.vpnapi.error', EVENT_LEVEL.ERROR, e.message, { ip });
 			return detail;
 		}
-
 		try {
 			const now = dayjs().utc().format('YYYY-MM-DD HH:mm:ss');
 			await c.env.db.batch([
@@ -222,11 +277,11 @@ const telegramService = {
 			]);
 		} catch (e) {
 			console.error('Failed to write ip cache:', e.message);
-			await this.logSystemEvent(c, 'security.ip_cache.write_error', EVENT_LEVEL.ERROR, e.message, { ip });
 		}
-
 		return detail;
 	},
+
+	// ─── NOTIFICATION SENDERS ────────────────────────────────────────────────
 
 	async sendEmailToBot(c, emailData) {
 		const { customDomain, tgMsgTo, tgMsgFrom, tgMsgText } = await settingService.query(c);
@@ -238,11 +293,10 @@ const telegramService = {
 
 	async sendIpSecurityNotification(c, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
 		const ipDetail = await this.queryIpSecurity(c, userInfo.activeIp);
-		await this.logSystemEvent(c, 'security.ip_changed', EVENT_LEVEL.WARN, `Recent IP updated for ${userInfo?.email || '-'}`, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false, relay: ipDetail?.security?.relay || false });
 		const message = ipSecurityMsgTemplate(userInfo, ipDetail);
-		await this.emitWebhookEvent(c, 'security.ip_changed', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false, relay: ipDetail?.security?.relay || false });
+		await this.emitWebhookEvent(c, 'security.ip_changed', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp, vpn: ipDetail?.security?.vpn || false });
 		await this.sendSecurityEventAlert(c, `IP changed: <code>${userInfo?.activeIp || '-'}</code>`, `User: ${userInfo?.email || '-'} (#${userInfo?.userId || '-'})`);
 	},
 
@@ -252,7 +306,7 @@ const telegramService = {
 			await this.setIpDetailContext(c, actorInfo);
 		}
 		regKeyInfo.roleInfo = await this.attachRolePermInfo(c, regKeyInfo.roleInfo);
-		if (actorInfo?.role) actorInfo.role = await this.attachRolePermInfo(c, actorInfo.role);
+		if (actorInfo) actorInfo.role = await this.getEffectiveRoleDisplay(c, actorInfo);
 		const message = regKeyManageMsgTemplate(action, regKeyInfo, actorInfo, extraInfo);
 		await this.emitWebhookEvent(c, 'regkey.manage', message, EVENT_LEVEL.INFO, { action, code: regKeyInfo?.code, actor: actorInfo?.email || '-' });
 	},
@@ -262,24 +316,19 @@ const telegramService = {
 		try {
 			userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 			await this.setIpDetailContext(c, userInfo);
-			userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+			userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
 			message = loginMsgTemplate(userInfo);
 		} catch (e) {
-			console.error('Failed to enrich login webhook payload, fallback to basic message:', e.message);
-			message = loginMsgTemplate({
-				...userInfo,
-				timezone: null,
-				ipDetail: null,
-				role: userInfo?.role || null
-			});
+			console.error('Failed to enrich login webhook payload:', e.message);
+			message = loginMsgTemplate({ ...userInfo, timezone: null, ipDetail: null });
 		}
-
 		await this.emitWebhookEvent(c, 'auth.login.success', message, EVENT_LEVEL.INFO, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp });
 	},
 
 	async sendRegisterNotification(c, userInfo, accountCount, roleInfo = null) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.createIp);
 		await this.setIpDetailContext(c, userInfo, 'createIp');
+		// Use effective role display for the registered user
 		roleInfo = await this.attachRolePermInfo(c, roleInfo);
 		const message = registerMsgTemplate(userInfo, accountCount, roleInfo);
 		await this.emitWebhookEvent(c, 'auth.register', message, EVENT_LEVEL.INFO, { userId: userInfo?.userId, email: userInfo?.email });
@@ -290,7 +339,7 @@ const telegramService = {
 		await this.setIpDetailContext(c, newUserInfo, 'createIp');
 		await this.setIpDetailContext(c, adminUser);
 		roleInfo = await this.attachRolePermInfo(c, roleInfo);
-		adminUser.role = await this.attachRolePermInfo(c, adminUser.role);
+		adminUser.role = await this.getEffectiveRoleDisplay(c, adminUser);
 		const message = adminCreateUserMsgTemplate(newUserInfo, roleInfo, adminUser);
 		await this.emitWebhookEvent(c, 'admin.user.create', message, EVENT_LEVEL.INFO, { userId: newUserInfo?.userId, email: newUserInfo?.email, admin: adminUser?.email || '-' });
 	},
@@ -301,7 +350,7 @@ const telegramService = {
 		const webAppUrl = customDomain ? `${domainUtils.toOssDomain(customDomain)}/api/telegram/getEmail/${jwtToken}` : 'https://www.cloudflare.com/404';
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
 		const message = sendEmailMsgTemplate(emailInfo, userInfo);
 		await this.emitWebhookEvent(c, 'email.sent', message, EVENT_LEVEL.INFO, { emailId: emailInfo?.emailId, userId: userInfo?.userId, from: emailInfo?.sendEmail, to: emailInfo?.toEmail, webAppUrl }, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
 	},
@@ -309,7 +358,7 @@ const telegramService = {
 	async sendEmailSoftDeleteNotification(c, emailIds, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
 		const message = softDeleteEmailMsgTemplate(emailIds, userInfo);
 		await this.emitWebhookEvent(c, 'email.delete.soft', message, EVENT_LEVEL.INFO, { emailIds, userId: userInfo?.userId });
 	},
@@ -317,7 +366,7 @@ const telegramService = {
 	async sendEmailHardDeleteNotification(c, emailIds, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
 		const message = hardDeleteEmailMsgTemplate(emailIds, userInfo);
 		await this.emitWebhookEvent(c, 'email.delete.hard', message, EVENT_LEVEL.WARN, { emailIds, userId: userInfo?.userId });
 	},
@@ -325,7 +374,7 @@ const telegramService = {
 	async sendAddAddressNotification(c, addressInfo, userInfo, totalAddresses) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
 		const message = addAddressMsgTemplate(addressInfo, userInfo, totalAddresses);
 		await this.emitWebhookEvent(c, 'account.address.add', message, EVENT_LEVEL.INFO, { email: addressInfo?.email, userId: userInfo?.userId });
 	},
@@ -333,7 +382,7 @@ const telegramService = {
 	async sendDeleteAddressNotification(c, addressEmail, userInfo, remainingAddresses) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
 		const message = deleteAddressMsgTemplate(addressEmail, userInfo, remainingAddresses);
 		await this.emitWebhookEvent(c, 'account.address.delete', message, EVENT_LEVEL.WARN, { email: addressEmail, userId: userInfo?.userId });
 	},
@@ -342,8 +391,8 @@ const telegramService = {
 		changedBy.timezone = await timezoneUtils.getTimezone(c, changedBy.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		await this.setIpDetailContext(c, changedBy);
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		changedBy.role = await this.attachRolePermInfo(c, changedBy.role);
+		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
+		changedBy.role = await this.getEffectiveRoleDisplay(c, changedBy);
 		oldRole = await this.attachRolePermInfo(c, oldRole);
 		newRole = await this.attachRolePermInfo(c, newRole);
 		const message = roleChangeMsgTemplate(userInfo, oldRole, newRole, changedBy);
@@ -354,8 +403,8 @@ const telegramService = {
 		changedBy.timezone = await timezoneUtils.getTimezone(c, changedBy.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		await this.setIpDetailContext(c, changedBy);
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		changedBy.role = await this.attachRolePermInfo(c, changedBy.role);
+		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
+		changedBy.role = await this.getEffectiveRoleDisplay(c, changedBy);
 		const message = userStatusChangeMsgTemplate(userInfo, oldStatus, newStatus, changedBy);
 		await this.emitWebhookEvent(c, 'admin.user.status_change', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, oldStatus, newStatus, by: changedBy?.email || '-' });
 	},
@@ -363,7 +412,7 @@ const telegramService = {
 	async sendPasswordResetNotification(c, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
 		const message = passwordResetMsgTemplate(userInfo);
 		await this.emitWebhookEvent(c, 'auth.password.reset', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email });
 	},
@@ -371,7 +420,7 @@ const telegramService = {
 	async sendUserSelfDeleteNotification(c, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
 		const message = userSelfDeleteMsgTemplate(userInfo);
 		await this.emitWebhookEvent(c, 'user.self_delete', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email });
 	},
@@ -380,23 +429,20 @@ const telegramService = {
 		adminUser.timezone = await timezoneUtils.getTimezone(c, adminUser.activeIp);
 		await this.setIpDetailContext(c, deletedUser);
 		await this.setIpDetailContext(c, adminUser);
-		deletedUser.role = await this.attachRolePermInfo(c, deletedUser.role);
-		adminUser.role = await this.attachRolePermInfo(c, adminUser.role);
+		deletedUser.role = await this.getEffectiveRoleDisplay(c, deletedUser);
+		adminUser.role = await this.getEffectiveRoleDisplay(c, adminUser);
 		const message = adminDeleteUserMsgTemplate(deletedUser, adminUser);
 		await this.emitWebhookEvent(c, 'admin.user.delete', message, EVENT_LEVEL.WARN, { deletedUserId: deletedUser?.userId, admin: adminUser?.email || '-' });
 	},
 
-
 	async sendRoleManageNotification(c, action, roleInfo, actorInfo, extra = '') {
 		actorInfo.timezone = await timezoneUtils.getTimezone(c, actorInfo.activeIp);
 		await this.setIpDetailContext(c, actorInfo);
-		actorInfo.role = await this.attachRolePermInfo(c, actorInfo.role);
-
+		actorInfo.role = await this.getEffectiveRoleDisplay(c, actorInfo);
 		if (roleInfo?.roleId !== undefined && roleInfo?.roleId !== null) {
 			const roleRow = await orm(c).select().from(role).where(eq(role.roleId, roleInfo.roleId)).get();
 			roleInfo = await this.attachRolePermInfo(c, roleRow || roleInfo);
 		}
-
 		const message = roleManageMsgTemplate(action, roleInfo, actorInfo, extra);
 		await this.emitWebhookEvent(c, 'admin.role.manage', message, EVENT_LEVEL.INFO, { action, roleId: roleInfo?.roleId, actor: actorInfo?.email || '-' });
 	},
@@ -405,15 +451,17 @@ const telegramService = {
 		const userTimezone = await timezoneUtils.getTimezone(c, ip);
 		const ipDetail = await this.queryIpSecurity(c, ip);
 		const message = failedLoginMsgTemplate(email, ip, attempts, device, os, browser, userTimezone, ipDetail);
-		await this.emitWebhookEvent(c, 'auth.login.failed', message, EVENT_LEVEL.WARN, { email, ip, attempts, device, os, browser, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false });
+		await this.emitWebhookEvent(c, 'auth.login.failed', message, EVENT_LEVEL.WARN, { email, ip, attempts, device, os, browser, vpn: ipDetail?.security?.vpn || false });
 		await this.sendSecurityEventAlert(c, `Failed login: ${email || '-'}`, `IP: <code>${ip || '-'}</code> | Attempts: ${attempts || 0}`);
 	},
 
 	async sendQuotaWarningNotification(c, userInfo, quotaType) {
-		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
 		const message = quotaWarningMsgTemplate(userInfo, quotaType);
 		await this.emitWebhookEvent(c, 'quota.warning', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email, quotaType });
 	},
+
+	// ─── BOT INFRA ────────────────────────────────────────────────────────────
 
 	async parseAllowedChatIds(c) {
 		const envValue = c.env.CHAT_ID || c.env.TG_CHAT_ID || c.env.tgChatId;
@@ -426,22 +474,16 @@ const telegramService = {
 				console.error('Failed to load tgChatId from setting:', e.message);
 			}
 		}
-		return String(raw || '')
-			.split(',')
-			.map(item => item.trim())
-			.filter(Boolean);
+		return String(raw || '').split(',').map(item => item.trim()).filter(Boolean);
 	},
 
 	async isAllowedChat(c, chatId, userId) {
 		const allowed = await this.parseAllowedChatIds(c);
-		if (allowed.length === 0) {
-			return false;
-		}
+		if (allowed.length === 0) return false;
 		const chatIdStr = String(chatId);
 		const userIdStr = userId !== undefined && userId !== null ? String(userId) : null;
 		return allowed.includes(chatIdStr) || (userIdStr && allowed.includes(userIdStr));
 	},
-
 
 	buildWebhookUrl(c) {
 		const url = new URL(c.req.url);
@@ -453,19 +495,14 @@ const telegramService = {
 
 	async getWebhookInfo(c) {
 		const tgBotToken = await this.getBotToken(c);
-		if (!tgBotToken) {
-			return { ok: false, description: 'Bot token is empty' };
-		}
+		if (!tgBotToken) return { ok: false, description: 'Bot token is empty' };
 		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/getWebhookInfo`);
-		const data = await res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
-		return data;
+		return res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
 	},
 
 	async setWebhook(c) {
 		const tgBotToken = await this.getBotToken(c);
-		if (!tgBotToken) {
-			return { ok: false, description: 'Bot token is empty' };
-		}
+		if (!tgBotToken) return { ok: false, description: 'Bot token is empty' };
 		const webhookUrl = this.buildWebhookUrl(c);
 		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/setWebhook`, {
 			method: 'POST',
@@ -478,41 +515,28 @@ const telegramService = {
 
 	async deleteWebhook(c) {
 		const tgBotToken = await this.getBotToken(c);
-		if (!tgBotToken) {
-			return { ok: false, description: 'Bot token is empty' };
-		}
+		if (!tgBotToken) return { ok: false, description: 'Bot token is empty' };
 		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/deleteWebhook`);
-		const data = await res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
-		return data;
+		return res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
 	},
+
 	async sendTelegramReply(c, chatId, message, replyMarkup = null) {
 		const tgBotToken = await this.getBotToken(c);
 		if (!tgBotToken) return;
-		const payload = {
-			chat_id: String(chatId),
-			parse_mode: 'HTML',
-			text: message,
-		};
+		const payload = { chat_id: String(chatId), parse_mode: 'HTML', text: message };
 		if (replyMarkup) payload.reply_markup = replyMarkup;
 		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(payload)
 		});
-		if (!res.ok) {
-			console.error(`Failed to send Telegram bot reply status: ${res.status} response: ${await res.text()}`);
-		}
+		if (!res.ok) console.error(`Failed to send Telegram bot reply status: ${res.status} response: ${await res.text()}`);
 	},
 
 	async editTelegramReply(c, chatId, messageId, message, replyMarkup = null) {
 		const tgBotToken = await this.getBotToken(c);
 		if (!tgBotToken) return;
-		const payload = {
-			chat_id: String(chatId),
-			message_id: messageId,
-			parse_mode: 'HTML',
-			text: message,
-		};
+		const payload = { chat_id: String(chatId), message_id: messageId, parse_mode: 'HTML', text: message };
 		if (replyMarkup) payload.reply_markup = replyMarkup;
 		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/editMessageText`, {
 			method: 'POST',
@@ -536,6 +560,8 @@ const telegramService = {
 		});
 	},
 
+	// ─── MENU BUILDERS ────────────────────────────────────────────────────────
+
 	buildMainMenu() {
 		return {
 			inline_keyboard: [
@@ -544,7 +570,7 @@ const telegramService = {
 				[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🌐 Whois', callback_data: 'cmd:whois:help' }],
 				[{ text: '📈 Stats', callback_data: 'cmd:stats:7d' }, { text: '🎟️ Invite', callback_data: 'cmd:invite:1' }],
 				[{ text: '🧭 System', callback_data: 'cmd:system' }, { text: '🗂 Events', callback_data: 'cmd:events:1' }],
-				[{ text: '🔎 Searchs', callback_data: 'cmd:searchs' }, { text: '🆔 Chat ID', callback_data: 'cmd:chatid' }],
+				[{ text: '🔎 Search', callback_data: 'cmd:search' }, { text: '🆔 Chat ID', callback_data: 'cmd:chatid' }],
 				[{ text: '❓ Help', callback_data: 'cmd:help' }]
 			]
 		};
@@ -560,9 +586,7 @@ const telegramService = {
 
 	buildDetailMenu({ backText, backCallbackData, previewUrl }) {
 		const rows = [];
-		if (previewUrl) {
-			rows.push([{ text: '🔎 Open Email Preview', web_app: { url: previewUrl } }]);
-		}
+		if (previewUrl) rows.push([{ text: '🔎 Open Email Preview', web_app: { url: previewUrl } }]);
 		rows.push([
 			{ text: backText || '⬅️ Back to List', callback_data: backCallbackData || 'cmd:menu' },
 			{ text: '🏠 Menu', callback_data: 'cmd:menu' }
@@ -570,13 +594,11 @@ const telegramService = {
 		return { inline_keyboard: rows };
 	},
 
-
 	mapUserStatusLabel(status) {
 		if (Number(status) === 0) return '0 (Active)';
 		if (Number(status) === 1) return '1 (Banned)';
 		return `${status} (Unknown)`;
 	},
-
 
 	buildSearchMenu() {
 		return {
@@ -606,20 +628,14 @@ const telegramService = {
 		}));
 	},
 
+	// ─── COMMAND FORMATTERS ───────────────────────────────────────────────────
+
 	formatSearchHelp(scope = 'general') {
-		if (scope === 'user') {
-			return `🔎 <b>/search user</b>\nContoh:\n• <code>/search user 2</code>\n• <code>/search user abyn@abyn.xyz</code>\n• <code>/search user abyn@abyn.xyz/2</code>\n\nMenampilkan detail user/address + aktivitas terbaru di webhook_event_log.`;
-		}
-		if (scope === 'email') {
-			return `🔎 <b>/search email</b>\nContoh: <code>/search email 121</code>\nMenampilkan detail email sesuai email id.`;
-		}
-		if (scope === 'invite') {
-			return `🔎 <b>/search invite</b>\nContoh:\n• <code>/search invite 6</code>\n• <code>/search invite SLEfZUtS</code>`;
-		}
-		if (scope === 'role') {
-			return `🔎 <b>/search role</b>\nContoh:\n• <code>/search role 1</code>\n• <code>/search role normal users</code>`;
-		}
-		return `🔎 <b>/searchs</b>\nGunakan menu search atau command: \n• <code>/search user &lt;userId|email|email/userId&gt;</code>\n• <code>/search email &lt;emailId&gt;</code>\n• <code>/search invite &lt;inviteId|code&gt;</code>\n• <code>/search role &lt;roleId|name&gt;</code>\n• <code>/search ip &lt;ip&gt;</code> (setara <code>/whois</code>)`;
+		if (scope === 'user') return `🔎 <b>/search user</b>\nExample:\n• <code>/search user 2</code>\n• <code>/search user user@example.com</code>\n• <code>/search user user@example.com/2</code>`;
+		if (scope === 'email') return `🔎 <b>/search email</b>\nExample: <code>/search email 121</code>`;
+		if (scope === 'invite') return `🔎 <b>/search invite</b>\nExample:\n• <code>/search invite 6</code>\n• <code>/search invite CODE123</code>`;
+		if (scope === 'role') return `🔎 <b>/search role</b>\nExample:\n• <code>/search role 1</code>\n• <code>/search role normal users</code>`;
+		return `🔎 <b>/search</b>\nUse menu or command:\n• <code>/search user &lt;userId|email&gt;</code>\n• <code>/search email &lt;emailId&gt;</code>\n• <code>/search invite &lt;id|code&gt;</code>\n• <code>/search role &lt;id|name&gt;</code>\n• <code>/search ip &lt;ip&gt;</code>`;
 	},
 
 	async queryRecentActivity(c, { userId = null, address = null, accountId = null, ip = null }, limit = 5) {
@@ -654,12 +670,12 @@ const telegramService = {
 	},
 
 	formatActivityBlock(items = []) {
-		if (!items.length) return 'Aktivitas terbaru: -';
+		if (!items.length) return 'Recent activity: -';
 		const lines = items.map(item => {
 			const oneLine = String(item.message || '').split('\n').find(Boolean) || '-';
 			return `• #${item.logId} [${item.level}] ${item.eventType} | ${item.createTime}\n  ${oneLine.slice(0, 140)}`;
 		});
-		return `Aktivitas terbaru:\n${lines.join('\n')}`;
+		return `Recent activity:\n${lines.join('\n')}`;
 	},
 
 	parseRangeDays(rangeArg = '7d') {
@@ -669,291 +685,151 @@ const telegramService = {
 		return Math.max(1, Math.min(30, Number(match[1])));
 	},
 
-	async formatSecurityCommand(c) {
-		const { results } = await c.env.db.prepare(`
-			SELECT ip, update_time, data
-			FROM ip_security_cache
-			WHERE
-				COALESCE(json_extract(data, '$.security.vpn'), 0) = 1
-				OR COALESCE(json_extract(data, '$.security.proxy'), 0) = 1
-				OR COALESCE(json_extract(data, '$.security.tor'), 0) = 1
-				OR COALESCE(json_extract(data, '$.security.relay'), 0) = 1
-			ORDER BY update_time DESC
-			LIMIT 10
-		`).all();
-		if (!results?.length) {
-			return { text: `🔐 <b>/security</b>
-No risky IP found in cache.`, replyMarkup: this.buildMainMenu() };
-		}
-		const lines = results.map((row, idx) => {
-			let detail = {};
-			try { detail = JSON.parse(row.data || '{}'); } catch (_) {}
-			const sec = detail.security || {};
-			const location = detail.location || {};
-			return `${idx + 1}. <code>${row.ip || '-'}</code> | vpn=${sec.vpn ? 'Y' : 'N'} proxy=${sec.proxy ? 'Y' : 'N'} tor=${sec.tor ? 'Y' : 'N'} relay=${sec.relay ? 'Y' : 'N'}
-   Loc: ${location.country || '-'} / ${location.city || '-'} | Updated: ${row.update_time || '-'}`;
-		}).join('\n');
-		const failedRows = await c.env.db.prepare(`
-			SELECT log_id as logId, message, create_time as createTime
-			FROM webhook_event_log
-			WHERE event_type = 'auth.login.failed'
-			ORDER BY log_id DESC
-			LIMIT 5
-		`).all();
-		const failedItems = failedRows?.results || [];
-		const failedPreview = failedItems.map(item => {
-			const oneLine = String(item.message || '').split('\n').slice(0, 2).join(' ').trim();
-			return `• #${item.logId} ${oneLine}\n  At: ${item.createTime || '-'}`;
-		}).join('\n');
-		const securityButtons = failedItems.map(item => ([{ text: `🧾 Security Event #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }]));
-		const replyMarkup = securityButtons.length > 0
-			? { inline_keyboard: [...securityButtons, [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-			: this.buildMainMenu();
-		return { text: `🔐 <b>/security</b>
+	// ─── ENHANCED COMMAND: USER DETAIL ───────────────────────────────────────
 
-${lines}
-
-⚠️ <b>Recent failed login events</b>
-${failedPreview || '-'}
-
-Tip: tap Security Event button or use <code>/security event &lt;id&gt;</code>.` , replyMarkup };
-	},
-
-	async formatSecurityEventDetailCommand(c, eventIdArg) {
-		return await this.formatEventDetailCommand(c, eventIdArg, { fromSecurity: true });
-	},
-
-	async formatWhoisCommand(c, ipArg) {
-		const ip = String(ipArg || '').trim();
-		if (!ip || ip === 'help') {
-			return {
-				text: `🌐 <b>/whois</b>
-Usage: <code>/whois 1.1.1.1</code>`,
-				replyMarkup: this.buildMainMenu()
-			};
-		}
-		const detail = await this.queryIpSecurity(c, ip);
-		const sec = detail?.security || {};
-		const loc = detail?.location || {};
-		const net = detail?.network || {};
-		const relatedUsersRows = await c.env.db.prepare(`
-			SELECT user_id as userId, email, type, status, active_ip as activeIp, create_ip as createIp
-			FROM user
-			WHERE is_del = 0 AND (active_ip = ? OR create_ip = ?)
-			ORDER BY user_id DESC
-			LIMIT 10
-		`).bind(ip, ip).all();
-		const relatedUsers = relatedUsersRows?.results || [];
-		const userLines = relatedUsers.map(item => `• #${item.userId} ${item.email} | role=${item.type} status=${item.status} | active=${item.activeIp || '-'} create=${item.createIp || '-'}`).join('\n');
-		return {
-			text: `🌐 <b>/whois</b>
-
-IP: <code>${ip}</code>
-VPN/Proxy/Tor/Relay: ${sec.vpn ? 'Y' : 'N'}/${sec.proxy ? 'Y' : 'N'}/${sec.tor ? 'Y' : 'N'}/${sec.relay ? 'Y' : 'N'}
-Location: ${loc.city || '-'}, ${loc.region || '-'}, ${loc.country || '-'} (${loc.country_code || '-'})
-ASN Org: ${net.autonomous_system_organization || '-'}
-ASN: ${net.autonomous_system_number || '-'}
-
-👥 <b>Accounts with this IP</b>
-${userLines || '-'}`,
-			replyMarkup: this.buildMainMenu()
-		};
-	},
-
-	async formatStatsCommand(c, rangeArg = '7d') {
-		const days = this.parseRangeDays(rangeArg);
-		const offset = `-${days - 1} day`;
-		const [regRows, receiveRows, sendRows] = await Promise.all([
-			c.env.db.prepare(`SELECT DATE(create_time) as day, COUNT(*) as total FROM user WHERE DATE(create_time) BETWEEN DATE('now', ?) AND DATE('now') GROUP BY DATE(create_time) ORDER BY day ASC`).bind(offset).all(),
-			c.env.db.prepare(`SELECT DATE(create_time) as day, COUNT(*) as total FROM email WHERE type = 0 AND DATE(create_time) BETWEEN DATE('now', ?) AND DATE('now') GROUP BY DATE(create_time) ORDER BY day ASC`).bind(offset).all(),
-			c.env.db.prepare(`SELECT DATE(create_time) as day, COUNT(*) as total FROM email WHERE type = 1 AND DATE(create_time) BETWEEN DATE('now', ?) AND DATE('now') GROUP BY DATE(create_time) ORDER BY day ASC`).bind(offset).all()
-		]);
-		const regMap = new Map((regRows.results || []).map(r => [r.day, Number(r.total)]));
-		const recvMap = new Map((receiveRows.results || []).map(r => [r.day, Number(r.total)]));
-		const sendMap = new Map((sendRows.results || []).map(r => [r.day, Number(r.total)]));
-		const lines = [];
-		let regTotal = 0;
-		let recvTotal = 0;
-		let sendTotal = 0;
-		for (let i = days - 1; i >= 0; i--) {
-			const day = dayjs.utc().subtract(i, 'day').format('YYYY-MM-DD');
-			const reg = regMap.get(day) || 0;
-			const recv = recvMap.get(day) || 0;
-			const send = sendMap.get(day) || 0;
-			regTotal += reg; recvTotal += recv; sendTotal += send;
-			lines.push(`${day}: U=${reg} | R=${recv} | S=${send}`);
-		}
-		return {
-			text: `📈 <b>/stats ${days}d</b>
-
-Total Reg: ${regTotal}
-Total Receive: ${recvTotal}
-Total Send: ${sendTotal}
-
-${lines.join('\n')}`,
-			replyMarkup: this.buildMainMenu()
-		};
-	},
-
-	async formatEventsCommand(c, page = 1) {
-		const pageSize = 5;
-		try {
-			const currentPage = Math.max(1, Number(page) || 1);
-			const rows = await c.env.db.prepare(`
-				SELECT log_id as logId, event_type as eventType, level, message, create_time as createTime
-				FROM webhook_event_log
-				ORDER BY log_id DESC
-				LIMIT ? OFFSET ?
-			`).bind(pageSize + 1, (currentPage - 1) * pageSize).all();
-			const items = rows.results || [];
-			if (!items.length) {
-				return { text: `🗂 <b>/events</b>
-No webhook event logs yet.`, replyMarkup: this.buildMainMenu() };
-			}
-			const hasNext = items.length > pageSize;
-			const visible = hasNext ? items.slice(0, pageSize) : items;
-			const body = visible.map(item => {
-				const lines = String(item.message || '').split('\n').filter(Boolean);
-				const preview = lines.slice(0, 3).join('\n');
-				const truncated = lines.length > 3 ? '\n…' : '';
-				return `#${item.logId} [${item.level}] ${item.eventType}\n${preview}${truncated}\nAt: ${item.createTime}`;
-			}).join('\n\n');
-			const eventButtons = visible.map(item => [{ text: `🧾 #${item.logId} ${item.eventType}`, callback_data: `cmd:event:${item.logId}:${currentPage}` }]);
-			const pagerMarkup = this.buildPager('events', currentPage, hasNext);
-			const replyMarkup = {
-				inline_keyboard: [...eventButtons, ...(pagerMarkup?.inline_keyboard || [])]
-			};
-			return { text: `🗂 <b>/events</b> (page ${currentPage})
-
-${body}
-
-Tip: tap event buttons below or use <code>/event &lt;id&gt;</code> for full detail + preview link.`, replyMarkup };
-		} catch (e) {
-			return { text: `🗂 <b>/events</b>
-Unable to query event log: ${e.message}`, replyMarkup: this.buildMainMenu() };
-		}
-	},
-
-	async formatEventDetailCommand(c, idArg, options = {}) {
-		const logId = Number(idArg || 0);
-		const fromSecurity = Boolean(options?.fromSecurity);
-		const backPage = Math.max(1, Number(options?.backPage || 1));
-		const customBackText = options?.backText;
-		const customBackCallbackData = options?.backCallbackData;
-		const finalBackText = customBackText || (fromSecurity ? '🔐 Security List' : '🗂 Events List');
-		const finalBackCallbackData = customBackCallbackData || (fromSecurity ? 'cmd:security' : `cmd:events:${backPage}`);
-		if (!logId) {
-			return { text: `🧾 <b>/event</b>
-Usage: <code>/event 123</code>`, replyMarkup: this.buildDetailMenu({ backText: finalBackText, backCallbackData: finalBackCallbackData }) };
-		}
-		const row = await c.env.db.prepare(`
-			SELECT log_id as logId, event_type as eventType, level, message, meta, create_time as createTime
-			FROM webhook_event_log
-			WHERE log_id = ?
-		`).bind(logId).first();
-		if (!row) {
-			return { text: `🧾 <b>/event</b>
-Event #${logId} not found.`, replyMarkup: this.buildDetailMenu({ backText: finalBackText, backCallbackData: finalBackCallbackData }) };
-		}
-		let meta = {};
-		try { meta = row.meta ? JSON.parse(row.meta) : {}; } catch (_) {}
-		const previewUrl = meta?.webAppUrl;
-		const detail = `🧾 <b>/event ${row.logId}</b>
-
-Type: ${row.eventType}
-Level: ${row.level}
-At: ${row.createTime}
-Message: ${row.message}
-
-Meta: <code>${JSON.stringify(meta || {}, null, 2).slice(0, 1200)}</code>`;
-		const replyMarkup = this.buildDetailMenu({
-			backText: finalBackText,
-			backCallbackData: finalBackCallbackData,
-			previewUrl
-		});
-		return { text: detail, replyMarkup };
-	},
-
-	async formatMailCommand(c, page = 1) {
-		const pageSize = 10;
-		const currentPage = Math.max(1, Number(page) || 1);
-		const rows = await orm(c).select({
-			emailId: email.emailId,
-			sendEmail: email.sendEmail,
-			toEmail: email.toEmail,
-			subject: email.subject,
-			type: email.type,
-			isDel: email.isDel,
-			createTime: email.createTime,
-		}).from(email).orderBy(desc(email.emailId)).limit(pageSize + 1).offset((currentPage - 1) * pageSize);
-
-		if (rows.length === 0) return { text: `📭 <b>/mail</b>
-No email data.`, replyMarkup: this.buildMainMenu() };
-		const hasNext = rows.length > pageSize;
-		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
-		const body = visibleRows.map(item => `🆔 <code>${item.emailId}</code> | ${item.type === 0 ? 'RECV' : 'SEND'} | del=${item.isDel}
-From: <code>${item.sendEmail || '-'}</code>
-To: <code>${item.toEmail || '-'}</code>
-Subj: ${item.subject || '-'}
-At: ${item.createTime}`).join('\n\n');
-		const mailButtons = visibleRows.map(item => [{ text: `✉️ #${item.emailId} ${item.subject || '(no subject)'}`.slice(0, 64), callback_data: `cmd:mailid:${item.emailId}:${currentPage}` }]);
-		const pagerMarkup = this.buildPager('mail', currentPage, hasNext);
-		const replyMarkup = {
-			inline_keyboard: [...mailButtons, ...(pagerMarkup?.inline_keyboard || [])]
-		};
-		return { text: `📨 <b>/mail</b> (page ${currentPage})
-
-${body}
-
-Tip: tap mail buttons below or use <code>/mail &lt;emailId&gt;</code> for detail + preview.`, replyMarkup };
-	},
-
-	async formatMailDetailCommand(c, emailIdArg, pageArg = 1) {
-		const emailId = Number(emailIdArg || 0);
+	async formatUserDetailCommand(c, userIdArg, pageArg = 1, highlightAccount = null) {
+		const userId = Number(userIdArg || 0);
 		const backPage = Math.max(1, Number(pageArg || 1));
-		if (!emailId) {
-			return { text: `📨 <b>/mail</b>\nUsage: <code>/mail 120</code> (detail) or <code>/mail 1</code> (page).`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: 'cmd:mail:1' }) };
+		if (!userId) {
+			return { text: `👤 <b>/user</b>\nUsage: <code>/user 2</code>`, replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: 'cmd:users:1' }) };
 		}
-		const row = await orm(c).select({
-			emailId: email.emailId,
-			sendEmail: email.sendEmail,
-			toEmail: email.toEmail,
-			subject: email.subject,
-			text: email.text,
-			type: email.type,
-			createTime: email.createTime,
-			userId: email.userId
-		}).from(email).where(eq(email.emailId, emailId)).get();
-		if (!row) {
-			return { text: `📨 <b>/mail</b>\nEmail #${emailId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: `cmd:mail:${backPage}` }) };
+		const userRow = await orm(c).select().from(user).where(eq(user.userId, userId)).get();
+		if (!userRow) {
+			return { text: `👤 <b>/user</b>\nUser #${userId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: `cmd:users:${backPage}` }) };
 		}
-		const { customDomain } = await settingService.query(c);
-		const jwtToken = await jwtUtils.generateToken(c, { emailId: row.emailId });
-		const webAppUrl = customDomain ? `${domainUtils.toOssDomain(customDomain)}/api/telegram/getEmail/${jwtToken}` : null;
-		const meta = {
-			emailId: row.emailId,
-			userId: row.userId,
-			from: row.sendEmail,
-			to: row.toEmail,
-			webAppUrl: webAppUrl || ''
-		};
-		const detail = `🧾 <b>/mail ${row.emailId}</b>
 
-Type: ${row.type === 0 ? 'email.received' : 'email.sent'}
-Level: info
-At: ${row.createTime}
-Message: ${row.type === 0 ? '📥 Email Received' : '📤 Email Sent'}
+		// ── FIX: Correctly identify admin user ──
+		const isAdmin = this.isAdminUser(c, userRow.email);
 
-📧 From: ${row.sendEmail || '-'}
-📨 To: ${row.toEmail || '-'}
-📝 Subject: ${row.subject || '-'}
-🆔 Email ID: ${row.emailId}
-💬 Preview: ${(row.text || '').slice(0, 120) || '-'}
+		const roleRows = await orm(c).select().from(role);
+		const roleMap = new Map(roleRows.map(r => [r.roleId, r.name]));
 
-Meta: <code>${JSON.stringify(meta, null, 2)}</code>`;
-		const replyMarkup = this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: `cmd:mail:${backPage}`, previewUrl: webAppUrl });
+		// Get effective role with correct admin handling
+		let effectiveRoleInfo;
+		let roleName;
+		if (isAdmin) {
+			effectiveRoleInfo = {
+				roleId: 0,
+				name: 'Admin (env)',
+				sendType: 'unlimited',
+				sendCount: 0,
+				accountCount: 0,
+				canSendEmail: true,
+				canAddAddress: true,
+				isAdmin: true
+			};
+			roleName = '👑 Admin (env)';
+		} else {
+			const roleRow = roleMap.get(userRow.type);
+			roleName = roleRow || `Type ${userRow.type}`;
+			const fullRoleRow = roleRows.find(r => r.roleId === userRow.type);
+			effectiveRoleInfo = fullRoleRow ? await this.attachRolePermInfo(c, { ...fullRoleRow }) : null;
+		}
+
+		const sendLimit = this.formatSendLimit(effectiveRoleInfo);
+		const addressLimit = this.formatAddressLimit(effectiveRoleInfo);
+
+		// Get send count stats
+		const sendCountRow = await c.env.db.prepare(`
+			SELECT COUNT(*) as sendCount FROM email WHERE user_id = ? AND type = 1 AND is_del = 0
+		`).bind(userId).first();
+		const receiveCountRow = await c.env.db.prepare(`
+			SELECT COUNT(*) as receiveCount FROM email WHERE user_id = ? AND type = 0 AND is_del = 0
+		`).bind(userId).first();
+		const userSendCount = Number(userRow.sendCount || 0);
+		const totalSendEmails = Number(sendCountRow?.sendCount || 0);
+		const totalReceiveEmails = Number(receiveCountRow?.receiveCount || 0);
+
+		// Build quota display
+		let quotaLine = '';
+		if (isAdmin) {
+			quotaLine = `📊 Send Quota: Unlimited (Admin)`;
+		} else if (effectiveRoleInfo?.sendCount > 0) {
+			const remaining = Math.max(0, effectiveRoleInfo.sendCount - userSendCount);
+			const pct = Math.round((userSendCount / effectiveRoleInfo.sendCount) * 100);
+			const bar = this.buildProgressBar(pct);
+			quotaLine = `📊 Send Used: ${userSendCount}/${effectiveRoleInfo.sendCount} ${bar} (${pct}% | ${remaining} left)`;
+		} else {
+			quotaLine = `📊 Send Used: ${totalSendEmails} total (Unlimited)`;
+		}
+
+		const relatedAccountsRows = await c.env.db.prepare(`
+			SELECT account_id as accountId, email, is_del as isDel
+			FROM account
+			WHERE user_id = ?
+			ORDER BY account_id DESC
+			LIMIT 10
+		`).bind(userId).all();
+		const relatedAccounts = relatedAccountsRows?.results || [];
+		const activeAccounts = relatedAccounts.filter(a => !a.isDel);
+		const accountText = relatedAccounts.length
+			? relatedAccounts.map(item => `• ${item.isDel ? '❌' : '✅'} account_id ${item.accountId}: ${item.email}`).join('\n')
+			: '-';
+
+		// Address quota
+		let addressQuotaLine = '';
+		if (isAdmin) {
+			addressQuotaLine = `📬 Address Quota: Unlimited (Admin)`;
+		} else if (effectiveRoleInfo?.accountCount > 0) {
+			const activeCount = activeAccounts.length;
+			const pct = Math.round((activeCount / effectiveRoleInfo.accountCount) * 100);
+			const bar = this.buildProgressBar(pct);
+			addressQuotaLine = `📬 Address: ${activeCount}/${effectiveRoleInfo.accountCount} ${bar} (${pct}%)`;
+		} else {
+			addressQuotaLine = `📬 Address: ${activeAccounts.length} (Unlimited)`;
+		}
+
+		const ipDetail = await this.queryIpSecurity(c, userRow.activeIp);
+		const sec = ipDetail?.security || {};
+		const loc = ipDetail?.location || {};
+		const ipLine = userRow.activeIp
+			? `📍 IP: <code>${userRow.activeIp}</code> | vpn=${sec.vpn ? 'Y' : 'N'} proxy=${sec.proxy ? 'Y' : 'N'} tor=${sec.tor ? 'Y' : 'N'}\n🗺️ Loc: ${loc.city || '-'}, ${loc.country || '-'}`
+			: `📍 IP: -`;
+
+		const recent = await this.queryRecentActivity(c, { userId: userRow.userId, address: userRow.email, accountId: highlightAccount || null, ip: userRow.activeIp }, 5);
+		const eventButtons = recent.map(item => ([{ text: `🧾 Event #${item.logId} ${item.eventType}`.slice(0, 64), callback_data: `cmd:userevent:${item.logId}:${userRow.userId}:${backPage}` }]));
+
+		const detail = `👤 <b>User Detail</b>
+
+🆔 User: #${userRow.userId} <code>${userRow.email}</code>
+${isAdmin ? '👑' : '🛡️'} Role: <b>${roleName}</b>
+📊 Status: ${this.mapUserStatusLabel(userRow.status)} | Deleted: ${userRow.isDel ? 'Yes' : 'No'}
+
+<b>📈 Quotas & Limits</b>
+${quotaLine}
+${addressQuotaLine}
+📧 Send Limit: ${sendLimit}
+📬 Address Limit: ${addressLimit}
+
+<b>📧 Email Stats</b>
+📥 Received: ${totalReceiveEmails} | 📤 Sent: ${totalSendEmails}
+
+<b>📬 Accounts</b>
+${accountText}
+${highlightAccount ? `\n🎯 Highlighted: account_id ${highlightAccount}` : ''}
+<b>🌐 Network</b>
+${ipLine}
+📱 Device: ${userRow.device || '-'} / ${userRow.os || '-'}
+🌐 Browser: ${userRow.browser || '-'}
+
+<b>📅 Timestamps</b>
+🗓️ Created: ${userRow.createTime || '-'}
+🕐 Last Active: ${userRow.activeTime || '-'}
+
+${this.formatActivityBlock(recent)}`;
+
+		const replyMarkup = { inline_keyboard: [...eventButtons, [{ text: '👥 Users List', callback_data: `cmd:users:${backPage}` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
 		return { text: detail, replyMarkup };
 	},
+
+	// Progress bar helper
+	buildProgressBar(pct, length = 10) {
+		const filled = Math.round((pct / 100) * length);
+		const empty = length - filled;
+		return '[' + '█'.repeat(Math.max(0, filled)) + '░'.repeat(Math.max(0, empty)) + ']';
+	},
+
+	// ─── ENHANCED COMMAND: USERS LIST ────────────────────────────────────────
 
 	async formatUsersCommand(c, page = 1) {
 		const pageSize = 5;
@@ -968,97 +844,479 @@ Meta: <code>${JSON.stringify(meta, null, 2)}</code>`;
 			sendCount: user.sendCount,
 			createTime: user.createTime,
 		}).from(user).orderBy(desc(user.userId)).limit(pageSize + 1).offset((currentPage - 1) * pageSize);
-		if (rows.length === 0) return { text: `👤 <b>/users</b>
-No user data.`, replyMarkup: this.buildMainMenu() };
+		if (rows.length === 0) return { text: `👤 <b>/users</b>\nNo user data.`, replyMarkup: this.buildMainMenu() };
+
 		const hasNext = rows.length > pageSize;
 		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
 		const visibleUserIds = visibleRows.map(item => item.userId);
+
 		let receiveCountMap = new Map();
+		let sendCountMap = new Map();
 		if (visibleUserIds.length > 0) {
 			const placeholders = visibleUserIds.map(() => '?').join(',');
-			const { results } = await c.env.db.prepare(`
-				SELECT user_id as userId, COUNT(*) as receiveCount
-				FROM email
-				WHERE type = 0 AND is_del = 0 AND user_id IN (${placeholders})
-				GROUP BY user_id
+			const { results: rr } = await c.env.db.prepare(`
+				SELECT user_id as userId, COUNT(*) as cnt FROM email WHERE type = 0 AND is_del = 0 AND user_id IN (${placeholders}) GROUP BY user_id
 			`).bind(...visibleUserIds).all();
-			receiveCountMap = new Map((results || []).map(row => [row.userId, row.receiveCount]));
+			receiveCountMap = new Map((rr || []).map(r => [r.userId, r.cnt]));
+			const { results: sr } = await c.env.db.prepare(`
+				SELECT user_id as userId, COUNT(*) as cnt FROM email WHERE type = 1 AND is_del = 0 AND user_id IN (${placeholders}) GROUP BY user_id
+			`).bind(...visibleUserIds).all();
+			sendCountMap = new Map((sr || []).map(r => [r.userId, r.cnt]));
 		}
+
 		const roleRows = await orm(c).select().from(role);
-		const map = new Map(roleRows.map(r => [r.roleId, r.name]));
+		const roleMap = new Map(roleRows.map(r => [r.roleId, r]));
+
 		const bodyParts = [];
 		for (const item of visibleRows) {
+			const isAdmin = this.isAdminUser(c, item.email);
+			let roleDisplay = '';
+			let sendLimit = '';
+			let addressLimit = '';
+
+			if (isAdmin) {
+				roleDisplay = '👑 Admin (env)';
+				sendLimit = 'Unlimited';
+				addressLimit = 'Unlimited';
+			} else {
+				const roleRow = roleMap.get(item.type);
+				roleDisplay = roleRow?.name || `Type ${item.type}`;
+				if (roleRow) {
+					const enriched = await this.attachRolePermInfo(c, { ...roleRow });
+					sendLimit = this.formatSendLimit(enriched);
+					addressLimit = this.formatAddressLimit(enriched);
+				}
+			}
+
 			const ipDetail = await this.queryIpSecurity(c, item.activeIp);
-			const security = ipDetail?.security || {};
-			const location = ipDetail?.location || {};
+			const sec = ipDetail?.security || {};
+			const loc = ipDetail?.location || {};
+
 			bodyParts.push(`🆔 <code>${item.userId}</code> ${item.email}
-Role: ${map.get(item.type) || (item.type === 0 ? 'admin' : 'unknown')} | Status: ${this.mapUserStatusLabel(item.status)} | Deleted: ${item.isDel}
-Send Count: ${item.sendCount || 0} | Receive Count: ${receiveCountMap.get(item.userId) || 0}
-Created: ${item.createTime || '-'}
-IP: <code>${item.activeIp || '-'}</code>
-VPNAPI: vpn=${security.vpn ? 'Y' : 'N'} proxy=${security.proxy ? 'Y' : 'N'} tor=${security.tor ? 'Y' : 'N'}
-Loc: ${location.country || '-'} / ${location.city || '-'}`);
+${isAdmin ? '👑' : '🛡️'} Role: ${roleDisplay} | Status: ${this.mapUserStatusLabel(item.status)}
+📤 Send: ${item.sendCount || 0} used | Limit: ${sendLimit}
+📬 Address Limit: ${addressLimit}
+📥 Receive: ${receiveCountMap.get(item.userId) || 0} | 📤 Send total: ${sendCountMap.get(item.userId) || 0}
+📍 IP: <code>${item.activeIp || '-'}</code> vpn=${sec.vpn ? 'Y' : 'N'} | ${loc.city || '-'}, ${loc.country || '-'}
+🗓️ Created: ${item.createTime || '-'}`);
 		}
-		const userButtons = visibleRows.map(item => ([{ text: `👤 Detail #${item.userId} ${item.email}`.slice(0, 64), callback_data: `cmd:userid:${item.userId}:${currentPage}` }]));
+
+		const userButtons = visibleRows.map(item => ([{ text: `👤 #${item.userId} ${item.email}`.slice(0, 64), callback_data: `cmd:userid:${item.userId}:${currentPage}` }]));
 		const pagerMarkup = this.buildPager('users', currentPage, hasNext);
 		const replyMarkup = { inline_keyboard: [...userButtons, ...(pagerMarkup?.inline_keyboard || [])] };
-		return { text: `👥 <b>/users</b> (page ${currentPage})
-
-${bodyParts.join('\n\n')}`, replyMarkup };
+		return { text: `👥 <b>/users</b> (page ${currentPage})\n\n${bodyParts.join('\n\n')}`, replyMarkup };
 	},
 
-	async formatUserDetailCommand(c, userIdArg, pageArg = 1, highlightAccount = null) {
-		const userId = Number(userIdArg || 0);
-		const backPage = Math.max(1, Number(pageArg || 1));
-		if (!userId) {
-			return { text: `👤 <b>/user</b>\nUsage: <code>/user 2</code>`, replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: 'cmd:users:1' }) };
-		}
-		const userRow = await orm(c).select().from(user).where(eq(user.userId, userId)).get();
-		if (!userRow) {
-			return { text: `👤 <b>/user</b>\nUser #${userId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: `cmd:users:${backPage}` }) };
-		}
-		const roleRows = await orm(c).select().from(role);
-		const roleMap = new Map(roleRows.map(r => [r.roleId, r.name]));
-		const relatedAccountsRows = await c.env.db.prepare(`
-			SELECT account_id as accountId, email
-			FROM account
-			WHERE is_del = 0 AND user_id = ?
-			ORDER BY account_id DESC
-			LIMIT 10
-		`).bind(userId).all();
-		const relatedAccounts = relatedAccountsRows?.results || [];
-		const accountText = relatedAccounts.length ? relatedAccounts.map(item => `• account_id ${item.accountId}: ${item.email}`).join('\n') : '-';
-		const recent = await this.queryRecentActivity(c, { userId: userRow.userId, address: userRow.email, accountId: highlightAccount || null, ip: userRow.activeIp }, 5);
-		const eventButtons = recent.map(item => ([{ text: `🧾 Event #${item.logId} ${item.eventType}`.slice(0, 64), callback_data: `cmd:userevent:${item.logId}:${userRow.userId}:${backPage}` }]));
-		const detail = `👤 <b>User Detail</b>\n\nUser: #${userRow.userId} ${userRow.email}\nRole: ${roleMap.get(userRow.type) || userRow.type}\nStatus: ${this.mapUserStatusLabel(userRow.status)}\nActive IP: <code>${userRow.activeIp || '-'}</code>\nAddress Match: ${highlightAccount ? `account_id ${highlightAccount}` : '-'}\n\n📬 <b>Accounts</b>\n${accountText}\n\n${this.formatActivityBlock(recent)}`;
-		const replyMarkup = { inline_keyboard: [...eventButtons, [{ text: '👥 Users List', callback_data: `cmd:users:${backPage}` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
-		return { text: detail, replyMarkup };
-	},
+	// ─── ENHANCED COMMAND: ROLE LIST ─────────────────────────────────────────
 
 	async formatRoleCommand(c) {
 		const rows = await orm(c).select().from(role);
-		if (rows.length === 0) return `🛡️ <b>/role</b>
-No role data.`;
+		if (rows.length === 0) return `🛡️ <b>/role</b>\nNo role data.`;
 		const roleRows = await Promise.all(rows.map(async item => this.attachRolePermInfo(c, { ...item })));
-		const body = roleRows.map(item => {
-			const sendDisplay = !item.canSendEmail
-				? 'Unauthorized'
-				: ((item.sendCount || 0) === 0 ? 'Unlimited' : `${item.sendType || '-'} / ${item.sendCount ?? '-'}`);
-			const addressDisplay = !item.canAddAddress
-				? 'Unauthorized'
-				: ((item.accountCount || 0) === 0 ? 'Unlimited' : `${item.accountCount ?? '-'}`);
-			return `🆔 <code>${item.roleId}</code> ${item.name}
-Send: ${sendDisplay}
-Address limit: ${addressDisplay}
-Permission: send=${item.canSendEmail ? 'Yes' : 'No'} | add-address=${item.canAddAddress ? 'Yes' : 'No'}
-Default: ${item.isDefault ? 'Yes' : 'No'}
-Ban email: ${item.banEmail || '-'}
-Avail domain: ${item.availDomain || '-'}`;
-		}).join('\n\n');
-		return `🛡️ <b>/role</b>
 
-${body}`;
+		// Count users per role
+		const roleIds = rows.map(r => r.roleId);
+		const placeholders = roleIds.map(() => '?').join(',');
+		const { results: userCounts } = await c.env.db.prepare(
+			`SELECT type, COUNT(*) as cnt FROM user WHERE is_del = 0 AND type IN (${placeholders}) GROUP BY type`
+		).bind(...roleIds).all();
+		const userCountMap = new Map((userCounts || []).map(r => [r.type, r.cnt]));
+
+		const body = roleRows.map(item => {
+			const sendLimit = this.formatSendLimit(item);
+			const addressLimit = this.formatAddressLimit(item);
+			const userCount = userCountMap.get(item.roleId) || 0;
+
+			return `🆔 <code>${item.roleId}</code> <b>${item.name}</b>${item.isDefault ? ' ⭐ Default' : ''}
+👥 Users: ${userCount}
+📤 Send Limit: ${sendLimit}
+📬 Address Limit: ${addressLimit}
+✉️ Perm send: ${item.canSendEmail ? 'Yes' : 'No'} | add-address: ${item.canAddAddress ? 'Yes' : 'No'}
+🚫 Ban email: ${item.banEmail || '-'}
+🌐 Avail domain: ${item.availDomain || 'All'}`;
+		}).join('\n\n');
+
+		return `🛡️ <b>/role</b>\n\n${body}`;
 	},
+
+	// ─── ENHANCED COMMAND: STATUS ─────────────────────────────────────────────
+
+	async formatStatusCommand(c) {
+		const numberCount = await analysisDao.numberCount(c);
+		const allowed = await this.parseAllowedChatIds(c);
+		const setting = await settingService.query(c);
+		const botEnabled = Boolean(setting.tgBotToken);
+
+		// Extra stats
+		const todayStr = dayjs.utc().format('YYYY-MM-DD');
+		const todayRegRow = await c.env.db.prepare(`SELECT COUNT(*) as cnt FROM user WHERE DATE(create_time) = ?`).bind(todayStr).first();
+		const todayReceiveRow = await c.env.db.prepare(`SELECT COUNT(*) as cnt FROM email WHERE type = 0 AND DATE(create_time) = ?`).bind(todayStr).first();
+		const todaySendRow = await c.env.db.prepare(`SELECT COUNT(*) as cnt FROM email WHERE type = 1 AND DATE(create_time) = ?`).bind(todayStr).first();
+		const deletedUserRow = await c.env.db.prepare(`SELECT COUNT(*) as cnt FROM user WHERE is_del = 1`).first();
+
+		return `📊 <b>/status</b>
+
+<b>👥 Users</b>
+Total: ${numberCount.userTotal} | Deleted: ${deletedUserRow?.cnt || 0}
+New today: ${todayRegRow?.cnt || 0}
+
+<b>📬 Addresses</b>
+Total: ${numberCount.accountTotal}
+
+<b>📧 Emails</b>
+Received: ${numberCount.receiveTotal} | Sent: ${numberCount.sendTotal}
+Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
+
+<b>⚙️ System</b>
+🤖 Bot enabled: ${botEnabled ? 'Yes' : 'No'}
+🔐 Allowed CHAT_ID: ${allowed.length > 0 ? allowed.join(', ') : '(empty)'}
+🌐 Push notify: ${await this.shouldSendWebhookPush(c) ? 'Yes' : 'No'}
+📅 Server time (UTC): ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')}`;
+	},
+
+	// ─── ENHANCED COMMAND: SECURITY ──────────────────────────────────────────
+
+	async formatSecurityCommand(c) {
+		const { results } = await c.env.db.prepare(`
+			SELECT ip, update_time, data
+			FROM ip_security_cache
+			WHERE
+				COALESCE(json_extract(data, '$.security.vpn'), 0) = 1
+				OR COALESCE(json_extract(data, '$.security.proxy'), 0) = 1
+				OR COALESCE(json_extract(data, '$.security.tor'), 0) = 1
+				OR COALESCE(json_extract(data, '$.security.relay'), 0) = 1
+			ORDER BY update_time DESC
+			LIMIT 10
+		`).all();
+
+		let linesText = 'No risky IP found in cache.';
+		if (results?.length) {
+			linesText = results.map((row, idx) => {
+				let detail = {};
+				try { detail = JSON.parse(row.data || '{}'); } catch (_) {}
+				const sec = detail.security || {};
+				const location = detail.location || {};
+				return `${idx + 1}. <code>${row.ip || '-'}</code> | vpn=${sec.vpn ? 'Y' : 'N'} proxy=${sec.proxy ? 'Y' : 'N'} tor=${sec.tor ? 'Y' : 'N'} relay=${sec.relay ? 'Y' : 'N'}
+   📍 ${location.country || '-'} / ${location.city || '-'} | Updated: ${row.update_time || '-'}`;
+			}).join('\n');
+		}
+
+		const failedRows = await c.env.db.prepare(`
+			SELECT log_id as logId, message, create_time as createTime
+			FROM webhook_event_log
+			WHERE event_type = 'auth.login.failed'
+			ORDER BY log_id DESC
+			LIMIT 5
+		`).all();
+		const failedItems = failedRows?.results || [];
+		const failedPreview = failedItems.map(item => {
+			const oneLine = String(item.message || '').split('\n').slice(0, 2).join(' ').trim();
+			return `• #${item.logId} ${oneLine}\n  At: ${item.createTime || '-'}`;
+		}).join('\n');
+
+		const securityButtons = failedItems.map(item => ([{ text: `🧾 Security Event #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }]));
+		const replyMarkup = securityButtons.length > 0
+			? { inline_keyboard: [...securityButtons, [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			: this.buildMainMenu();
+
+		return { text: `🔐 <b>/security</b>
+
+<b>⚠️ Risky IPs</b>
+${linesText}
+
+<b>⚠️ Recent failed login events</b>
+${failedPreview || '-'}
+
+Tip: tap Security Event button or use <code>/security event &lt;id&gt;</code>.`, replyMarkup };
+	},
+
+	async formatSecurityEventDetailCommand(c, eventIdArg) {
+		return await this.formatEventDetailCommand(c, eventIdArg, { fromSecurity: true });
+	},
+
+	// ─── NEW COMMAND: BAN USER ────────────────────────────────────────────────
+
+	async formatBanUserCommand(c, userIdArg, action = 'ban') {
+		const userId = Number(userIdArg || 0);
+		if (!userId) return { text: `🚫 Usage: <code>/ban &lt;userId&gt;</code> or <code>/unban &lt;userId&gt;</code>`, replyMarkup: this.buildMainMenu() };
+
+		const userRow = await c.env.db.prepare('SELECT user_id as userId, email, status, is_del as isDel FROM user WHERE user_id = ?').bind(userId).first();
+		if (!userRow) return { text: `🚫 User #${userId} not found.`, replyMarkup: this.buildMainMenu() };
+
+		if (this.isAdminUser(c, userRow.email)) {
+			return { text: `🚫 Cannot ban admin user.`, replyMarkup: this.buildMainMenu() };
+		}
+
+		const newStatus = action === 'ban' ? 1 : 0;
+		await c.env.db.prepare('UPDATE user SET status = ? WHERE user_id = ?').bind(newStatus, userId).run();
+
+		const actionText = action === 'ban' ? '🚫 Banned' : '✅ Unbanned';
+		return { text: `${actionText} user #${userId} <code>${userRow.email}</code>`, replyMarkup: this.buildMainMenu() };
+	},
+
+	// ─── WHOIS COMMAND ────────────────────────────────────────────────────────
+
+	async formatWhoisCommand(c, ipArg) {
+		const ip = String(ipArg || '').trim();
+		if (!ip || ip === 'help') {
+			return { text: `🌐 <b>/whois</b>\nUsage: <code>/whois 1.1.1.1</code>`, replyMarkup: this.buildMainMenu() };
+		}
+		const detail = await this.queryIpSecurity(c, ip);
+		const sec = detail?.security || {};
+		const loc = detail?.location || {};
+		const net = detail?.network || {};
+
+		const relatedUsersRows = await c.env.db.prepare(`
+			SELECT user_id as userId, email, type, status, active_ip as activeIp, create_ip as createIp
+			FROM user
+			WHERE is_del = 0 AND (active_ip = ? OR create_ip = ?)
+			ORDER BY user_id DESC
+			LIMIT 10
+		`).bind(ip, ip).all();
+		const relatedUsers = relatedUsersRows?.results || [];
+		const userLines = relatedUsers.map(item => `• #${item.userId} ${item.email} | status=${item.status} | active=${item.activeIp || '-'} create=${item.createIp || '-'}`).join('\n');
+
+		return {
+			text: `🌐 <b>/whois ${ip}</b>
+
+🛡️ VPN/Proxy/Tor/Relay: ${sec.vpn ? '✅' : '❌'}/${sec.proxy ? '✅' : '❌'}/${sec.tor ? '✅' : '❌'}/${sec.relay ? '✅' : '❌'}
+🏙️ Location: ${loc.city || '-'}, ${loc.region || '-'}, ${loc.country || '-'} (${loc.country_code || '-'})
+🏢 ASN Org: ${net.autonomous_system_organization || '-'}
+🔢 ASN: ${net.autonomous_system_number || '-'}
+
+👥 <b>Accounts with this IP</b>
+${userLines || '-'}`,
+			replyMarkup: this.buildMainMenu()
+		};
+	},
+
+	// ─── STATS COMMAND ────────────────────────────────────────────────────────
+
+	async formatStatsCommand(c, rangeArg = '7d') {
+		const days = this.parseRangeDays(rangeArg);
+		const offset = `-${days - 1} day`;
+		const [regRows, receiveRows, sendRows] = await Promise.all([
+			c.env.db.prepare(`SELECT DATE(create_time) as day, COUNT(*) as total FROM user WHERE DATE(create_time) BETWEEN DATE('now', ?) AND DATE('now') GROUP BY DATE(create_time) ORDER BY day ASC`).bind(offset).all(),
+			c.env.db.prepare(`SELECT DATE(create_time) as day, COUNT(*) as total FROM email WHERE type = 0 AND DATE(create_time) BETWEEN DATE('now', ?) AND DATE('now') GROUP BY DATE(create_time) ORDER BY day ASC`).bind(offset).all(),
+			c.env.db.prepare(`SELECT DATE(create_time) as day, COUNT(*) as total FROM email WHERE type = 1 AND DATE(create_time) BETWEEN DATE('now', ?) AND DATE('now') GROUP BY DATE(create_time) ORDER BY day ASC`).bind(offset).all()
+		]);
+		const regMap = new Map((regRows.results || []).map(r => [r.day, Number(r.total)]));
+		const recvMap = new Map((receiveRows.results || []).map(r => [r.day, Number(r.total)]));
+		const sendMap = new Map((sendRows.results || []).map(r => [r.day, Number(r.total)]));
+
+		const lines = [];
+		let regTotal = 0, recvTotal = 0, sendTotal = 0;
+		for (let i = days - 1; i >= 0; i--) {
+			const day = dayjs.utc().subtract(i, 'day').format('YYYY-MM-DD');
+			const reg = regMap.get(day) || 0;
+			const recv = recvMap.get(day) || 0;
+			const send = sendMap.get(day) || 0;
+			regTotal += reg; recvTotal += recv; sendTotal += send;
+			const bar = recv > 0 ? '▓'.repeat(Math.min(10, recv)) : '░';
+			lines.push(`${day}: 👤${reg} 📥${recv} ${bar} 📤${send}`);
+		}
+
+		return {
+			text: `📈 <b>/stats ${days}d</b>
+
+<b>Totals</b>
+👤 New users: ${regTotal}
+📥 Received: ${recvTotal}
+📤 Sent: ${sendTotal}
+
+<b>Daily (U=users R=receive S=send)</b>
+${lines.join('\n')}`,
+			replyMarkup: this.buildMainMenu()
+		};
+	},
+
+	// ─── EVENTS COMMAND ───────────────────────────────────────────────────────
+
+	async formatEventsCommand(c, page = 1) {
+		const pageSize = 5;
+		try {
+			const currentPage = Math.max(1, Number(page) || 1);
+			const rows = await c.env.db.prepare(`
+				SELECT log_id as logId, event_type as eventType, level, message, create_time as createTime
+				FROM webhook_event_log
+				ORDER BY log_id DESC
+				LIMIT ? OFFSET ?
+			`).bind(pageSize + 1, (currentPage - 1) * pageSize).all();
+			const items = rows.results || [];
+			if (!items.length) return { text: `🗂 <b>/events</b>\nNo webhook event logs yet.`, replyMarkup: this.buildMainMenu() };
+
+			const hasNext = items.length > pageSize;
+			const visible = hasNext ? items.slice(0, pageSize) : items;
+			const levelEmoji = { info: 'ℹ️', warn: '⚠️', error: '❌' };
+			const body = visible.map(item => {
+				const lines = String(item.message || '').split('\n').filter(Boolean);
+				const preview = lines.slice(0, 2).join(' ');
+				return `${levelEmoji[item.level] || '•'} #${item.logId} [${item.eventType}]\n${preview.slice(0, 120)}\n🕐 ${item.createTime}`;
+			}).join('\n\n');
+
+			const eventButtons = visible.map(item => [{ text: `🧾 #${item.logId} ${item.eventType}`, callback_data: `cmd:event:${item.logId}:${currentPage}` }]);
+			const pagerMarkup = this.buildPager('events', currentPage, hasNext);
+			const replyMarkup = { inline_keyboard: [...eventButtons, ...(pagerMarkup?.inline_keyboard || [])] };
+			return { text: `🗂 <b>/events</b> (page ${currentPage})\n\n${body}`, replyMarkup };
+		} catch (e) {
+			return { text: `🗂 <b>/events</b>\nError: ${e.message}`, replyMarkup: this.buildMainMenu() };
+		}
+	},
+
+	async formatEventDetailCommand(c, idArg, options = {}) {
+		const logId = Number(idArg || 0);
+		const fromSecurity = Boolean(options?.fromSecurity);
+		const backPage = Math.max(1, Number(options?.backPage || 1));
+		const finalBackText = options?.backText || (fromSecurity ? '🔐 Security List' : '🗂 Events List');
+		const finalBackCallbackData = options?.backCallbackData || (fromSecurity ? 'cmd:security' : `cmd:events:${backPage}`);
+
+		if (!logId) return { text: `🧾 <b>/event</b>\nUsage: <code>/event 123</code>`, replyMarkup: this.buildDetailMenu({ backText: finalBackText, backCallbackData: finalBackCallbackData }) };
+
+		const row = await c.env.db.prepare(`
+			SELECT log_id as logId, event_type as eventType, level, message, meta, create_time as createTime
+			FROM webhook_event_log WHERE log_id = ?
+		`).bind(logId).first();
+		if (!row) return { text: `🧾 Event #${logId} not found.`, replyMarkup: this.buildDetailMenu({ backText: finalBackText, backCallbackData: finalBackCallbackData }) };
+
+		let meta = {};
+		try { meta = row.meta ? JSON.parse(row.meta) : {}; } catch (_) {}
+		const previewUrl = meta?.webAppUrl;
+
+		const detail = `🧾 <b>/event ${row.logId}</b>
+
+Type: ${row.eventType}
+Level: ${row.level}
+At: ${row.createTime}
+
+Message:
+${row.message}
+
+Meta: <code>${JSON.stringify(meta || {}, null, 2).slice(0, 1200)}</code>`;
+
+		return { text: detail, replyMarkup: this.buildDetailMenu({ backText: finalBackText, backCallbackData: finalBackCallbackData, previewUrl }) };
+	},
+
+	// ─── MAIL COMMANDS ────────────────────────────────────────────────────────
+
+	async formatMailCommand(c, page = 1) {
+		const pageSize = 10;
+		const currentPage = Math.max(1, Number(page) || 1);
+		const rows = await orm(c).select({
+			emailId: email.emailId,
+			sendEmail: email.sendEmail,
+			toEmail: email.toEmail,
+			subject: email.subject,
+			type: email.type,
+			isDel: email.isDel,
+			createTime: email.createTime,
+		}).from(email).orderBy(desc(email.emailId)).limit(pageSize + 1).offset((currentPage - 1) * pageSize);
+
+		if (rows.length === 0) return { text: `📭 <b>/mail</b>\nNo email data.`, replyMarkup: this.buildMainMenu() };
+		const hasNext = rows.length > pageSize;
+		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
+		const body = visibleRows.map(item => `🆔 <code>${item.emailId}</code> | ${item.type === 0 ? '📥 RECV' : '📤 SEND'} | del=${item.isDel}
+From: <code>${item.sendEmail || '-'}</code>
+To: <code>${item.toEmail || '-'}</code>
+Subj: ${(item.subject || '-').slice(0, 60)}
+At: ${item.createTime}`).join('\n\n');
+
+		const mailButtons = visibleRows.map(item => [{ text: `✉️ #${item.emailId} ${(item.subject || '(no subject)').slice(0, 50)}`, callback_data: `cmd:mailid:${item.emailId}:${currentPage}` }]);
+		const pagerMarkup = this.buildPager('mail', currentPage, hasNext);
+		const replyMarkup = { inline_keyboard: [...mailButtons, ...(pagerMarkup?.inline_keyboard || [])] };
+		return { text: `📨 <b>/mail</b> (page ${currentPage})\n\n${body}`, replyMarkup };
+	},
+
+	async formatMailDetailCommand(c, emailIdArg, pageArg = 1) {
+		const emailId = Number(emailIdArg || 0);
+		const backPage = Math.max(1, Number(pageArg || 1));
+		if (!emailId) return { text: `📨 <b>/mail</b>\nUsage: <code>/mail 120</code>`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: 'cmd:mail:1' }) };
+
+		const row = await orm(c).select({
+			emailId: email.emailId,
+			sendEmail: email.sendEmail,
+			toEmail: email.toEmail,
+			subject: email.subject,
+			text: email.text,
+			type: email.type,
+			status: email.status,
+			createTime: email.createTime,
+			userId: email.userId,
+			unread: email.unread
+		}).from(email).where(eq(email.emailId, emailId)).get();
+
+		if (!row) return { text: `📨 Email #${emailId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: `cmd:mail:${backPage}` }) };
+
+		const { customDomain } = await settingService.query(c);
+		const jwtToken = await jwtUtils.generateToken(c, { emailId: row.emailId });
+		const webAppUrl = customDomain ? `${domainUtils.toOssDomain(customDomain)}/api/telegram/getEmail/${jwtToken}` : null;
+
+		const statusMap = { 0: 'Saving', 1: 'Received', 2: 'Sent', 3: 'Delivered', 4: 'Bounced', 5: 'Failed', 6: 'Complained', 7: 'Delayed', 8: 'No recipient' };
+		const preview = (row.text || '').slice(0, 200);
+
+		const detail = `📧 <b>Email #${row.emailId}</b>
+
+📥/📤 Type: ${row.type === 0 ? 'Received' : 'Sent'}
+📊 Status: ${statusMap[row.status] || row.status}
+👁️ Read: ${row.unread ? 'Unread' : 'Read'}
+
+📤 From: <code>${row.sendEmail || '-'}</code>
+📨 To: <code>${row.toEmail || '-'}</code>
+📝 Subject: ${row.subject || '-'}
+🆔 User ID: ${row.userId}
+🕐 At: ${row.createTime}
+
+💬 Preview:
+${preview || '-'}`;
+
+		return { text: detail, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: `cmd:mail:${backPage}`, previewUrl: webAppUrl }) };
+	},
+
+	// ─── SYSTEM COMMAND ───────────────────────────────────────────────────────
+
+	async formatSystemCommand(c) {
+		try {
+			const [cacheCount, staleCount, webhookInfo, recentSystemLogs] = await Promise.all([
+				c.env.db.prepare('SELECT COUNT(*) as total FROM ip_security_cache').first(),
+				c.env.db.prepare("SELECT COUNT(*) as total FROM ip_security_cache WHERE update_time <= datetime('now', '-2 day')").first(),
+				this.getWebhookInfo(c),
+				c.env.db.prepare(`
+					SELECT level, event_type as eventType, message, create_time as createTime
+					FROM webhook_event_log
+					WHERE event_type LIKE 'email.%' OR level = 'error'
+					ORDER BY log_id DESC LIMIT 3
+				`).all()
+			]);
+
+			const webhookUrl = webhookInfo?.result?.url || '-';
+			const pending = webhookInfo?.result?.pending_update_count ?? '-';
+			const lastError = webhookInfo?.result?.last_error_message || '-';
+			const pushMode = await this.shouldSendWebhookPush(c) ? 'Push + Log' : 'Log only';
+
+			const logs = (recentSystemLogs?.results || []).map((row, i) => {
+				const firstLine = String(row.message || '').split('\n').find(Boolean) || '-';
+				return `${i + 1}. [${row.createTime || '-'}] [${row.level}] ${row.eventType}: ${firstLine.slice(0, 150)}`;
+			}).join('\n');
+
+			return `🧭 <b>/system</b>
+
+<b>💾 IP Cache</b>
+Total rows: ${cacheCount?.total || 0}
+Stale (≥2 days): ${staleCount?.total || 0}
+
+<b>🤖 Webhook</b>
+URL: <code>${webhookUrl}</code>
+Pending: ${pending}
+Last Error: ${lastError}
+Notify Mode: ${pushMode}
+
+<b>📜 Recent Email/Error Logs</b>
+${logs || 'No logs yet.'}`;
+		} catch (e) {
+			return `🧭 <b>/system</b>\nError: ${e.message}`;
+		}
+	},
+
+	// ─── INVITE COMMANDS ──────────────────────────────────────────────────────
 
 	async formatInviteCommand(c, page = 1) {
 		const pageSize = 10;
@@ -1071,123 +1329,74 @@ ${body}`;
 			expireTime: regKey.expireTime,
 			createTime: regKey.createTime,
 		}).from(regKey).orderBy(desc(regKey.regKeyId)).limit(pageSize + 1).offset((currentPage - 1) * pageSize);
-		if (rows.length === 0) return { text: `🎟️ <b>/invite</b>
-No invite code data.`, replyMarkup: this.buildMainMenu() };
+
+		if (rows.length === 0) return { text: `🎟️ <b>/invite</b>\nNo invite code data.`, replyMarkup: this.buildMainMenu() };
+
 		const hasNext = rows.length > pageSize;
 		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
-		const body = visibleRows.map(item => `🆔 <code>${item.regKeyId}</code> <code>${item.code}</code>`).join('\n');
-		const inviteButtons = visibleRows.map(item => [{ text: `🎟️ Detail #${item.regKeyId} ${item.code}`.slice(0, 64), callback_data: `cmd:inviteid:${item.regKeyId}:${currentPage}` }]);
+		const roleRows = await orm(c).select().from(role);
+		const roleMap = new Map(roleRows.map(r => [r.roleId, r.name]));
+
+		const body = visibleRows.map(item => {
+			const roleName = roleMap.get(item.roleId) || `Role ${item.roleId}`;
+			const expired = item.expireTime && dayjs.utc(item.expireTime).isBefore(dayjs.utc()) ? ' ⛔ Expired' : '';
+			const exhausted = item.count <= 0 ? ' ⚠️ Exhausted' : '';
+			return `🆔 <code>${item.regKeyId}</code> <code>${item.code}</code> | ${roleName}${expired}${exhausted}\n   Uses left: ${item.count} | Expire: ${item.expireTime || '-'}`;
+		}).join('\n');
+
+		const inviteButtons = visibleRows.map(item => [{ text: `🎟️ #${item.regKeyId} ${item.code}`.slice(0, 64), callback_data: `cmd:inviteid:${item.regKeyId}:${currentPage}` }]);
 		const pagerMarkup = this.buildPager('invite', currentPage, hasNext);
 		const replyMarkup = { inline_keyboard: [...inviteButtons, ...(pagerMarkup?.inline_keyboard || [])] };
-		return { text: `🎟️ <b>/invite</b> (page ${currentPage})
-
-${body}`, replyMarkup };
+		return { text: `🎟️ <b>/invite</b> (page ${currentPage})\n\n${body}`, replyMarkup };
 	},
 
 	async formatInviteDetailCommand(c, inviteIdArg, pageArg = 1) {
 		const inviteId = Number(inviteIdArg || 0);
 		const backPage = Math.max(1, Number(pageArg || 1));
-		if (!inviteId) {
-			return { text: `🎟️ <b>/invite</b>\nUsage: <code>/invite 6</code>`, replyMarkup: this.buildDetailMenu({ backText: '🎟 Invite List', backCallbackData: 'cmd:invite:1' }) };
-		}
-		const item = await orm(c).select({
-			regKeyId: regKey.regKeyId,
-			code: regKey.code,
-			count: regKey.count,
-			roleId: regKey.roleId,
-			userId: regKey.userId,
-			expireTime: regKey.expireTime,
-			createTime: regKey.createTime,
-		}).from(regKey).where(eq(regKey.regKeyId, inviteId)).get();
-		if (!item) {
-			return { text: `🎟️ <b>/invite</b>\nInvite #${inviteId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '🎟 Invite List', backCallbackData: `cmd:invite:${backPage}` }) };
-		}
-		const roleInfo = await orm(c).select({ roleId: role.roleId, name: role.name }).from(role).where(eq(role.roleId, item.roleId)).get();
-		let usedBy = '-';
-		if (item.userId && Number(item.userId) > 0) {
-			const usedUser = await orm(c).select({ userId: user.userId, email: user.email, createTime: user.createTime }).from(user).where(eq(user.userId, item.userId)).get();
-			usedBy = usedUser ? `#${usedUser.userId} ${usedUser.email} (created: ${usedUser.createTime || '-'})` : `user_id ${item.userId}`;
-		}
-		const text = `🎟️ <b>/invite (page ${backPage})</b>
+		if (!inviteId) return { text: `🎟️ Usage: <code>/invite 6</code>`, replyMarkup: this.buildDetailMenu({ backText: '🎟 Invite List', backCallbackData: 'cmd:invite:1' }) };
 
-🆔 ${item.regKeyId} ${item.code}
-Role: ${roleInfo?.name || item.roleId}
-Remaining: ${item.count} | Expire: ${item.expireTime || '-'}
-Created: ${item.createTime || '-'}
-Used by: ${usedBy}`;
+		const item = await orm(c).select().from(regKey).where(eq(regKey.regKeyId, inviteId)).get();
+		if (!item) return { text: `🎟️ Invite #${inviteId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '🎟 Invite List', backCallbackData: `cmd:invite:${backPage}` }) };
+
+		const roleInfo = await orm(c).select().from(role).where(eq(role.roleId, item.roleId)).get();
+		const enrichedRole = roleInfo ? await this.attachRolePermInfo(c, { ...roleInfo }) : null;
+
+		// Usage history
+		const historyRows = await c.env.db.prepare(`
+			SELECT user_id as userId, email, create_time as createTime FROM user WHERE reg_key_id = ? ORDER BY user_id DESC LIMIT 5
+		`).bind(inviteId).all();
+		const historyUsers = historyRows?.results || [];
+		const historyText = historyUsers.length
+			? historyUsers.map(u => `• #${u.userId} ${u.email} (${u.createTime})`).join('\n')
+			: '-';
+
+		const expired = item.expireTime && dayjs.utc(item.expireTime).isBefore(dayjs.utc()) ? ' ⛔ Expired' : '';
+		const exhausted = item.count <= 0 ? ' ⚠️ Exhausted' : '';
+
+		const text = `🎟️ <b>Invite Detail #${inviteId}</b>
+
+🔑 Code: <code>${item.code}</code>${expired}${exhausted}
+🛡️ Role: ${roleInfo?.name || '-'}
+📤 Send limit: ${enrichedRole ? this.formatSendLimit(enrichedRole) : '-'}
+📬 Address limit: ${enrichedRole ? this.formatAddressLimit(enrichedRole) : '-'}
+🔢 Uses left: ${item.count}
+⏳ Expire: ${item.expireTime || '-'}
+🗓️ Created: ${item.createTime || '-'}
+
+<b>Recent users who used this code:</b>
+${historyText}`;
+
 		return { text, replyMarkup: this.buildDetailMenu({ backText: '🎟 Invite List', backCallbackData: `cmd:invite:${backPage}` }) };
 	},
 
-	async formatStatusCommand(c) {
-		const numberCount = await analysisDao.numberCount(c);
-		const allowed = await this.parseAllowedChatIds(c);
-		const botEnabled = Boolean((await settingService.query(c)).tgBotToken);
-		return `📊 <b>/status</b>
-
-Users: ${numberCount.userTotal}
-Accounts: ${numberCount.accountTotal}
-Receive Emails: ${numberCount.receiveTotal}
-Send Emails: ${numberCount.sendTotal}
-
-🤖 Bot enabled: ${botEnabled ? 'Yes' : 'No'}
-🔐 Allowed CHAT_ID: ${allowed.length > 0 ? allowed.join(', ') : '(empty)'}`;
-	},
-
-	async formatSystemCommand(c) {
-		try {
-			const [cacheCount, staleCount, webhookInfo, recentSystemLogs] = await Promise.all([
-			c.env.db.prepare('SELECT COUNT(*) as total FROM ip_security_cache').first(),
-			c.env.db.prepare("SELECT COUNT(*) as total FROM ip_security_cache WHERE update_time <= datetime('now', '-2 day')").first(),
-			this.getWebhookInfo(c),
-			c.env.db.prepare(`
-				SELECT level, event_type as eventType, message, create_time as createTime
-				FROM webhook_event_log
-				WHERE event_type LIKE 'email.%' OR level = 'error'
-				ORDER BY log_id DESC
-				LIMIT 3
-			`).all()
-		]);
-		const webhookUrl = webhookInfo?.result?.url || '-';
-			const pending = webhookInfo?.result?.pending_update_count ?? '-';
-			const lastError = webhookInfo?.result?.last_error_message || '-';
-			const pushMode = await this.shouldSendWebhookPush(c) ? 'Push + Log' : 'Log only (default, no spam)';
-			const logs = (recentSystemLogs?.results || []).map((row, index) => {
-				const firstLine = String(row.message || '').split('\n').find(Boolean) || '-';
-				const shortLine = firstLine.length > 180 ? `${firstLine.slice(0, 177)}...` : firstLine;
-				return `${index + 1}. [${row.createTime || '-'}] [${row.level || '-'}] ${row.eventType}: ${shortLine}`;
-			}).join('\n');
-		return `🧭 <b>/system</b>
-
-IP Cache Rows: ${cacheCount?.total || 0}
-Stale (≥2 days): ${staleCount?.total || 0}
-
-Webhook URL: <code>${webhookUrl}</code>
-Pending Updates: ${pending} (queued updates waiting delivery)
-Last Error: ${lastError}
-Webhook Notify Mode: ${pushMode}
-
-📜 Recent Email/Error Logs (3):
-${logs || 'No logs yet.'}`;
-		} catch (e) {
-			return `🧭 <b>/system</b>\nUnable to query system logs: ${e.message}`;
-		}
-	},
-
-
-
-	async formatSearchsCommand(c) {
-		return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
-	},
+	// ─── SEARCH COMMANDS ──────────────────────────────────────────────────────
 
 	async formatSearchCommand(c, typeArg, queryArgs = []) {
 		const type = String(typeArg || '').toLowerCase();
 		const query = String((queryArgs || []).join(' ').trim());
 		if (!type) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
 		if (type === 'ip') return await this.formatWhoisCommand(c, query);
-		if (type === 'email') {
-			const emailId = String(query || '').replace(/email\s*id/gi, '').trim();
-			return await this.formatMailDetailCommand(c, emailId, 1);
-		}
+		if (type === 'email') return await this.formatMailDetailCommand(c, query, 1);
 		if (type === 'invite') {
 			if (!query) return { text: this.formatSearchHelp('invite'), replyMarkup: this.buildSearchMenu() };
 			let row = null;
@@ -1196,7 +1405,7 @@ ${logs || 'No logs yet.'}`;
 				const byCode = await c.env.db.prepare('SELECT rege_key_id as regKeyId FROM reg_key WHERE code = ? LIMIT 1').bind(query).first();
 				if (byCode) row = byCode;
 			}
-			if (!row?.regKeyId) return { text: `🔎 <b>/search invite</b>\nInvite tidak ditemukan untuk: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
+			if (!row?.regKeyId) return { text: `🔎 Invite not found: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
 			return await this.formatInviteDetailCommand(c, row.regKeyId, 1);
 		}
 		if (type === 'role') {
@@ -1207,16 +1416,18 @@ ${logs || 'No logs yet.'}`;
 				const roleRows = await c.env.db.prepare('SELECT role_id as roleId FROM role WHERE LOWER(name) = LOWER(?) LIMIT 1').bind(query).all();
 				if (roleRows?.results?.[0]?.roleId !== undefined) roleRow = await orm(c).select().from(role).where(eq(role.roleId, roleRows.results[0].roleId)).get();
 			}
-			if (!roleRow) return { text: `🔎 <b>/search role</b>\nRole tidak ditemukan: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
+			if (!roleRow) return { text: `🔎 Role not found: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
 			const roleInfo = await this.attachRolePermInfo(c, { ...roleRow });
-			const sendDisplay = !roleInfo.canSendEmail
-				? 'Unauthorized'
-				: ((roleInfo.sendCount || 0) === 0 ? 'Unlimited' : `${roleInfo.sendType || '-'} / ${roleInfo.sendCount ?? '-'}`);
-			const addressDisplay = !roleInfo.canAddAddress
-				? 'Unauthorized'
-				: ((roleInfo.accountCount || 0) === 0 ? 'Unlimited' : `${roleInfo.accountCount ?? '-'}`);
 			return {
-				text: `🔎 <b>Search Result: Role</b>\n\n🆔 <code>${roleInfo.roleId}</code> ${roleInfo.name}\nSend: ${sendDisplay}\nAddress limit: ${addressDisplay}`,
+				text: `🔎 <b>Search Result: Role</b>
+
+🆔 <code>${roleInfo.roleId}</code> <b>${roleInfo.name}</b>
+📤 Send limit: ${this.formatSendLimit(roleInfo)}
+📬 Address limit: ${this.formatAddressLimit(roleInfo)}
+✉️ Can send: ${roleInfo.canSendEmail ? 'Yes' : 'No'} | add-address: ${roleInfo.canAddAddress ? 'Yes' : 'No'}
+🚫 Ban email: ${roleInfo.banEmail || '-'}
+🌐 Avail domain: ${roleInfo.availDomain || 'All'}
+⭐ Default: ${roleInfo.isDefault ? 'Yes' : 'No'}`,
 				replyMarkup: this.buildSearchMenu()
 			};
 		}
@@ -1227,6 +1438,7 @@ ${logs || 'No logs yet.'}`;
 			const accountPart = String(accountPartRaw || '').replace(/akun\s*id/gi, '').trim();
 			let matchedUser = null;
 			let matchedAccount = null;
+
 			if (/^\d+$/.test(addressPart)) {
 				matchedUser = await orm(c).select().from(user).where(eq(user.userId, Number(addressPart))).get();
 				if (!matchedUser) {
@@ -1244,75 +1456,64 @@ ${logs || 'No logs yet.'}`;
 				matchedAccount = await orm(c).select({ accountId: account.accountId, email: account.email, userId: account.userId }).from(account).where(eq(account.accountId, Number(accountPart))).get();
 			}
 			if (!matchedUser && matchedAccount?.userId) matchedUser = await orm(c).select().from(user).where(eq(user.userId, matchedAccount.userId)).get();
-			if (!matchedUser) return { text: `🔎 <b>/search user</b>\nData tidak ditemukan untuk: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
+			if (!matchedUser) return { text: `🔎 User not found: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
 			return await this.formatUserDetailCommand(c, matchedUser.userId, 1, matchedAccount?.accountId || null);
 		}
 		return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
 	},
+
+	// ─── MAIN RESOLVER ────────────────────────────────────────────────────────
+
 	async resolveCommand(c, command, args, chatId, userId) {
 		const pageArg = Number(args?.[0] || 1);
-		if (command === '/searchs' && args?.[0]) {
-			return { text: this.formatSearchHelp(args[0]), replyMarkup: this.buildSearchMenu() };
-		}
 		switch (command) {
 			case '/start':
 			case '/help':
 				return {
 					text: `🤖 <b>Cloud Mail Bot Command Center</b>
 
-Use buttons below or type commands manually:
-
 📊 <b>/status</b> — system counters + bot state
-👥 <b>/users [page]</b> — users + send/receive + IP intelligence (status: 0=active, 1=banned)
-📨 <b>/mail [page|emailId]</b> — recent emails with pager or detail by email id
+👥 <b>/users [page]</b> — users with quota info
+📨 <b>/mail [page|emailId]</b> — emails with pager or detail
 🛡️ <b>/role</b> — role quota + authorization flags
-🔐 <b>/security</b> — suspicious IP snapshot + recent failed-login events
-🌐 <b>/whois &lt;ip&gt;</b> — live/cache IP intelligence lookup
-📈 <b>/stats [range]</b> — timeline stats, e.g. <code>/stats 7d</code>
-🧭 <b>/system</b> — webhook health + recent email/error logs
-🗂 <b>/events [page]</b> — browse webhook/system event log
-🧾 <b>/event &lt;id&gt;</b> — open one event detail + preview link
-👤 <b>/user &lt;id&gt;</b> — user detail + recent activity events
-🎟️ <b>/invite [page]</b> — invitation codes
-🔎 <b>/searchs</b> — quick search menu
-🔎 <b>/search ...</b> — search user/email/invite/role/ip
-🆔 <b>/chatid</b> — your current chat_id/user_id
+🔐 <b>/security</b> — suspicious IP + failed-login events
+🌐 <b>/whois &lt;ip&gt;</b> — IP intelligence lookup
+📈 <b>/stats [range]</b> — e.g. <code>/stats 7d</code>
+🧭 <b>/system</b> — webhook health + logs
+🗂 <b>/events [page]</b> — webhook/system event log
+🧾 <b>/event &lt;id&gt;</b> — event detail + preview
+👤 <b>/user &lt;id&gt;</b> — user detail with role, quota, progress bars
+🎟️ <b>/invite [page]</b> — invite codes with usage history
+🔎 <b>/search [type] [query]</b> — search user/email/invite/role/ip
+🚫 <b>/ban &lt;userId&gt;</b> — ban a user
+✅ <b>/unban &lt;userId&gt;</b> — unban a user
+🆔 <b>/chatid</b> — your chat_id/user_id
 
 <b>Examples:</b>
-• <code>/users 2</code>
+• <code>/user 1</code> — view admin user correctly
+• <code>/search user abyn@abyn.xyz</code>
+• <code>/search email 42</code>
+• <code>/search ip 1.1.1.1</code>
 • <code>/whois 1.1.1.1</code>
-• <code>/stats 3d</code>
-• <code>/events 1</code>
-• <code>/event 42</code>
-• <code>/search user abyn@abyn.xyz/akun id 2</code>
-• <code>/search email 121</code>`,
+• <code>/stats 14d</code>
+• <code>/ban 5</code>`,
 					replyMarkup: this.buildMainMenu()
 				};
 			case '/mail':
-				if (args?.[0] === 'page') {
-					return await this.formatMailCommand(c, Number(args?.[1] || 1));
-				}
-				if (/^\d+$/.test(String(args?.[0] || '')) && Number(args[0]) > 0 && Number(args[0]) <= 50) {
-					return await this.formatMailCommand(c, Number(args[0]));
-				}
-				if (args?.[0]) {
-					return await this.formatMailDetailCommand(c, args[0], args?.[1]);
-				}
+				if (args?.[0] === 'page') return await this.formatMailCommand(c, Number(args?.[1] || 1));
+				if (/^\d+$/.test(String(args?.[0] || '')) && Number(args[0]) > 0 && Number(args[0]) <= 50) return await this.formatMailCommand(c, Number(args[0]));
+				if (args?.[0]) return await this.formatMailDetailCommand(c, args[0], args?.[1]);
 				return await this.formatMailCommand(c, pageArg);
 			case '/users':
-				if (args?.[0] === 'detail') {
-					return await this.formatUserDetailCommand(c, args?.[1], args?.[2]);
-				}
+				if (args?.[0] === 'detail') return await this.formatUserDetailCommand(c, args?.[1], args?.[2]);
 				return await this.formatUsersCommand(c, pageArg);
+			case '/user':
+				return await this.formatUserDetailCommand(c, args?.[0], args?.[1]);
 			case '/role':
 				return { text: await this.formatRoleCommand(c), replyMarkup: this.buildMainMenu() };
 			case '/invite':
-				if (args?.[0] === 'detail') {
-					return await this.formatInviteDetailCommand(c, args?.[1], args?.[2]);
-				}
-				if (args?.[0] && /^\d+$/.test(String(args[0])) && Number(args[0]) > 50) {
-					return await this.formatInviteDetailCommand(c, args[0], 1);
-				}
+				if (args?.[0] === 'detail') return await this.formatInviteDetailCommand(c, args?.[1], args?.[2]);
+				if (args?.[0] && /^\d+$/.test(String(args[0])) && Number(args[0]) > 50) return await this.formatInviteDetailCommand(c, args[0], 1);
 				return await this.formatInviteCommand(c, pageArg);
 			case '/status':
 				return { text: await this.formatStatusCommand(c), replyMarkup: this.buildMainMenu() };
@@ -1321,37 +1522,38 @@ Use buttons below or type commands manually:
 			case '/system':
 				return { text: await this.formatSystemCommand(c), replyMarkup: this.buildMainMenu() };
 			case '/security':
-				if (args?.[0] === 'event') {
-					return await this.formatSecurityEventDetailCommand(c, args?.[1]);
-				}
+				if (args?.[0] === 'event') return await this.formatSecurityEventDetailCommand(c, args?.[1]);
 				return await this.formatSecurityCommand(c);
 			case '/whois':
 				return await this.formatWhoisCommand(c, args?.[0]);
 			case '/stats':
 				return await this.formatStatsCommand(c, args?.[0] || '7d');
 			case '/events':
-				if (args?.[0] === 'page') {
-					return await this.formatEventsCommand(c, Number(args?.[1] || 1));
-				}
-				if (args?.[0]) {
-					return await this.formatEventDetailCommand(c, args[0]);
-				}
+				if (args?.[0] === 'page') return await this.formatEventsCommand(c, Number(args?.[1] || 1));
+				if (args?.[0]) return await this.formatEventDetailCommand(c, args[0]);
 				return await this.formatEventsCommand(c, pageArg);
 			case '/event':
-				if (args?.[0] === 'user') {
-					return await this.formatEventDetailCommand(c, args?.[1], { backText: '👤 User Detail', backCallbackData: `cmd:userid:${args?.[2] || 1}:${args?.[3] || 1}` });
-				}
+				if (args?.[0] === 'user') return await this.formatEventDetailCommand(c, args?.[1], { backText: '👤 User Detail', backCallbackData: `cmd:userid:${args?.[2] || 1}:${args?.[3] || 1}` });
 				return await this.formatEventDetailCommand(c, args?.[0], { backPage: args?.[1] });
-			case '/user':
-				return await this.formatUserDetailCommand(c, args?.[0], args?.[1]);
-			case '/searchs':
-				return await this.formatSearchsCommand(c);
+			case '/ban':
+				return await this.formatBanUserCommand(c, args?.[0], 'ban');
+			case '/unban':
+				return await this.formatBanUserCommand(c, args?.[0], 'unban');
 			case '/search':
+			case '/searchs': // alias kept for backwards compat
+				// bare /search or /searchs with no args → show search menu
+				if (!args?.[0]) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
+				// /search user → show user-specific help
+				if (['user','email','invite','role','ip'].includes(args[0]) && !args[1]) {
+					return { text: this.formatSearchHelp(args[0]), replyMarkup: this.buildSearchMenu() };
+				}
 				return await this.formatSearchCommand(c, args?.[0], args?.slice(1));
 			default:
 				return await this.resolveCommand(c, '/help', [], chatId, userId);
 		}
 	},
+
+	// ─── WEBHOOK HANDLER ──────────────────────────────────────────────────────
 
 	async handleBotWebhook(c, body) {
 		const callback = body?.callback_query;
@@ -1362,69 +1564,60 @@ Use buttons below or type commands manually:
 			await this.answerCallbackQuery(c, callback.id);
 			if (!await this.isAllowedChat(c, chatId, userId)) return;
 			if (callback.data === 'cmd:noop') return;
-			if (callback.data === 'cmd:menu' || callback.data === 'cmd:help') {
-				const result = await this.resolveCommand(c, '/help', [], chatId, userId);
-				const edited = await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
-				if (!edited) await this.sendTelegramReply(c, chatId, result.text, result.replyMarkup);
-				return;
-			}
 
 			let command = '/help';
 			let args = [];
-			const pagingMatch = /^cmd:(mail|users|invite|events):(\d+)$/.exec(callback.data);
-			if (pagingMatch) {
-				command = `/${pagingMatch[1]}`;
-				if (pagingMatch[1] === 'mail' || pagingMatch[1] === 'events') {
-					args = ['page', pagingMatch[2]];
-				} else {
-					args = [pagingMatch[2]];
-				}
-			} else if (/^cmd:userid:(\d+):(\d+)$/.test(callback.data)) {
-				const userDetailMatch = /^cmd:userid:(\d+):(\d+)$/.exec(callback.data);
-				command = '/users';
-				args = ['detail', userDetailMatch[1], userDetailMatch[2]];
-			} else if (/^cmd:userevent:(\d+):(\d+):(\d+)$/.test(callback.data)) {
-				const userEventMatch = /^cmd:userevent:(\d+):(\d+):(\d+)$/.exec(callback.data);
-				command = '/event';
-				args = ['user', userEventMatch[1], userEventMatch[2], userEventMatch[3]];
-			} else if (/^cmd:inviteid:(\d+):(\d+)$/.test(callback.data)) {
-				const inviteDetailMatch = /^cmd:inviteid:(\d+):(\d+)$/.exec(callback.data);
-				command = '/invite';
-				args = ['detail', inviteDetailMatch[1], inviteDetailMatch[2]];
-			} else if (/^cmd:searchhelp:(user|email|invite|role)$/.test(callback.data)) {
-				const searchHelpMatch = /^cmd:searchhelp:(user|email|invite|role)$/.exec(callback.data);
-				command = '/searchs';
-				args = [searchHelpMatch[1]];
-			} else if (/^cmd:mailid:(\d+):(\d+)$/.test(callback.data)) {
-				const mailDetailMatch = /^cmd:mailid:(\d+):(\d+)$/.exec(callback.data);
-				command = '/mail';
-				args = [mailDetailMatch[1], mailDetailMatch[2]];
-			} else if (/^cmd:mailid:(\d+)$/.test(callback.data)) {
-				const mailDetailMatch = /^cmd:mailid:(\d+)$/.exec(callback.data);
-				command = '/mail';
-				args = [mailDetailMatch[1], '1'];
-			} else if (/^cmd:securityevent:(\d+)$/.test(callback.data)) {
-				const securityEventDetailMatch = /^cmd:securityevent:(\d+)$/.exec(callback.data);
-				command = '/security';
-				args = ['event', securityEventDetailMatch[1]];
-			} else if (/^cmd:event:(\d+):(\d+)$/.test(callback.data)) {
-				const eventDetailMatch = /^cmd:event:(\d+):(\d+)$/.exec(callback.data);
-				command = '/event';
-				args = [eventDetailMatch[1], eventDetailMatch[2]];
-			} else if (/^cmd:event:(\d+)$/.test(callback.data)) {
-				const eventDetailMatch = /^cmd:event:(\d+)$/.exec(callback.data);
-				command = '/event';
-				args = [eventDetailMatch[1], '1'];
-			} else if (callback.data === 'cmd:stats:7d') {
-				command = '/stats';
-				args = ['7d'];
-			} else if (callback.data === 'cmd:whois:help') {
-				command = '/whois';
-				args = ['help'];
+
+			if (callback.data === 'cmd:menu' || callback.data === 'cmd:help') {
+				command = '/help';
 			} else {
-				const single = /^cmd:(status|role|chatid|system|security|searchs)$/.exec(callback.data);
-				if (single) command = `/${single[1]}`;
+				const pagingMatch = /^cmd:(mail|users|invite|events):(\d+)$/.exec(callback.data);
+				if (pagingMatch) {
+					command = `/${pagingMatch[1]}`;
+					if (['mail', 'events'].includes(pagingMatch[1])) {
+						args = ['page', pagingMatch[2]];
+					} else {
+						args = [pagingMatch[2]];
+					}
+				} else if (/^cmd:userid:(\d+):(\d+)$/.test(callback.data)) {
+					const m = /^cmd:userid:(\d+):(\d+)$/.exec(callback.data);
+					command = '/users'; args = ['detail', m[1], m[2]];
+				} else if (/^cmd:userevent:(\d+):(\d+):(\d+)$/.test(callback.data)) {
+					const m = /^cmd:userevent:(\d+):(\d+):(\d+)$/.exec(callback.data);
+					command = '/event'; args = ['user', m[1], m[2], m[3]];
+				} else if (/^cmd:inviteid:(\d+):(\d+)$/.test(callback.data)) {
+					const m = /^cmd:inviteid:(\d+):(\d+)$/.exec(callback.data);
+					command = '/invite'; args = ['detail', m[1], m[2]];
+				} else if (/^cmd:searchhelp:(user|email|invite|role)$/.test(callback.data)) {
+					const m = /^cmd:searchhelp:(user|email|invite|role)$/.exec(callback.data);
+					command = '/search'; args = [m[1]]; // show subtype help, no query → help screen
+				} else if (callback.data === 'cmd:search') {
+					command = '/search'; // bare search → show menu
+				} else if (/^cmd:mailid:(\d+):(\d+)$/.test(callback.data)) {
+					const m = /^cmd:mailid:(\d+):(\d+)$/.exec(callback.data);
+					command = '/mail'; args = [m[1], m[2]];
+				} else if (/^cmd:mailid:(\d+)$/.test(callback.data)) {
+					const m = /^cmd:mailid:(\d+)$/.exec(callback.data);
+					command = '/mail'; args = [m[1], '1'];
+				} else if (/^cmd:securityevent:(\d+)$/.test(callback.data)) {
+					const m = /^cmd:securityevent:(\d+)$/.exec(callback.data);
+					command = '/security'; args = ['event', m[1]];
+				} else if (/^cmd:event:(\d+):(\d+)$/.test(callback.data)) {
+					const m = /^cmd:event:(\d+):(\d+)$/.exec(callback.data);
+					command = '/event'; args = [m[1], m[2]];
+				} else if (/^cmd:event:(\d+)$/.test(callback.data)) {
+					const m = /^cmd:event:(\d+)$/.exec(callback.data);
+					command = '/event'; args = [m[1], '1'];
+				} else if (callback.data === 'cmd:stats:7d') {
+					command = '/stats'; args = ['7d'];
+				} else if (callback.data === 'cmd:whois:help') {
+					command = '/whois'; args = ['help'];
+				} else {
+					const single = /^cmd:(status|role|chatid|system|security)$/.exec(callback.data);
+					if (single) command = `/${single[1]}`;
+				}
 			}
+
 			const result = await this.resolveCommand(c, command, args, chatId, userId);
 			const edited = await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
 			if (!edited) await this.sendTelegramReply(c, chatId, result.text, result.replyMarkup);
@@ -1435,9 +1628,7 @@ Use buttons below or type commands manually:
 		const text = message?.text?.trim();
 		const chatId = message?.chat?.id;
 		const userId = message?.from?.id;
-		if (!text || !chatId) {
-			return;
-		}
+		if (!text || !chatId) return;
 
 		if (!await this.isAllowedChat(c, chatId, userId)) {
 			const allowed = await this.parseAllowedChatIds(c);
@@ -1449,21 +1640,17 @@ Use buttons below or type commands manually:
 			return;
 		}
 
-		const args = text.split(/\s+/).filter(Boolean);
-		const rawCommand = args.shift();
+		const argParts = text.split(/\s+/).filter(Boolean);
+		const rawCommand = argParts.shift();
 		const command = rawCommand.includes('@') ? rawCommand.split('@')[0] : rawCommand;
-		console.log(`Telegram bot command received chat_id=${chatId} user_id=${userId || '-'} command=${command}`);
-		await this.logSystemEvent(c, 'telegram.command.received', EVENT_LEVEL.INFO, command, { chatId, userId, args });
+		console.log(`Telegram bot command: chat_id=${chatId} user_id=${userId || '-'} command=${command}`);
+		await this.logSystemEvent(c, 'telegram.command.received', EVENT_LEVEL.INFO, command, { chatId, userId, args: argParts });
 
-		const result = await this.resolveCommand(c, command, args, chatId, userId);
+		const result = await this.resolveCommand(c, command, argParts, chatId, userId);
 		let reply = result.text;
-		if (reply.length > 3800) {
-			reply = `${reply.slice(0, 3800)}\n\n...truncated`;
-		}
+		if (reply.length > 3800) reply = `${reply.slice(0, 3800)}\n\n...truncated`;
 		await this.sendTelegramReply(c, chatId, reply, result.replyMarkup);
 	},
-
-
 };
 
 export default telegramService;
