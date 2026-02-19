@@ -120,6 +120,87 @@ export async function email(message, env, ctx) {
 			}
 		}
 
+		// Keyword blacklist check — subject + body (text)
+		try {
+			const { results: keywords } = await env.db.prepare(`
+				SELECT id, keyword FROM ban_keyword ORDER BY id ASC
+			`).all();
+
+			if (keywords?.length) {
+				const subject = (email?.subject || '').toLowerCase();
+				const body = (email?.text || '').toLowerCase();
+				const combined = subject + ' ' + body;
+
+				const matchedKeyword = keywords.find(k =>
+					combined.includes(String(k.keyword || '').toLowerCase())
+				);
+
+				if (matchedKeyword) {
+					message.setReject('Message blocked by keyword filter');
+
+					try {
+						await env.db.prepare(`
+							CREATE TABLE IF NOT EXISTS ban_email_log (
+								id INTEGER PRIMARY KEY AUTOINCREMENT,
+								sender_email TEXT,
+								to_email TEXT,
+								matched_rule TEXT,
+								subject TEXT,
+								text_preview TEXT,
+								html_content TEXT,
+								create_time TEXT DEFAULT (datetime('now'))
+							)
+						`).run();
+
+						const textPreview = (email?.text || '').slice(0, 500);
+						const htmlContent = (email?.html || '').slice(0, 65000);
+
+						await env.db.batch([
+							env.db.prepare(`
+								INSERT INTO ban_email_log (sender_email, to_email, matched_rule, subject, text_preview, html_content, create_time)
+								VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+							`).bind(
+								senderEmail,
+								message.to || '',
+								`keyword:${matchedKeyword.keyword}`,
+								email?.subject || '',
+								textPreview,
+								htmlContent
+							),
+							env.db.prepare(`
+								DELETE FROM ban_email_log
+								WHERE create_time <= datetime('now', '-24 hour')
+							`)
+						]);
+
+						const lastRow = await env.db.prepare(`
+							SELECT id FROM ban_email_log
+							WHERE sender_email = ? AND to_email = ?
+							ORDER BY id DESC LIMIT 1
+						`).bind(senderEmail, message.to || '').first();
+
+						const banLogId = lastRow?.id || null;
+
+						await telegramService.logSystemEvent(
+							{ env },
+							'security.blacklist.blocked',
+							'warn',
+							`🚫 Keyword blocked email\nFrom: ${senderEmail}\nTo: ${message.to}\nKeyword: "${matchedKeyword.keyword}"\nSubject: ${email?.subject || '-'}`,
+							{ senderEmail, to: message.to, matchedRule: `keyword:${matchedKeyword.keyword}`, subject: email?.subject || '', banLogId }
+						);
+					} catch (e) {
+						console.error('Failed to log keyword block event:', e);
+					}
+
+					return;
+				}
+			}
+		} catch (e) {
+			if (!String(e?.message || '').toLowerCase().includes('no such table')) {
+				console.error('Keyword blacklist check failed:', e.message);
+			}
+		}
+
 		const account = await accountService.selectByEmailIncludeDel({ env: env }, message.to);
 
 		if (!account && noRecipient === settingConst.noRecipient.CLOSE) {
