@@ -348,16 +348,25 @@ const telegramService = {
 		await this.sendTelegramMessage(c, quotaWarningMsgTemplate(userInfo, quotaType));
 	},
 
-	parseAllowedChatIds(c) {
-		const raw = c.env.CHAT_ID || c.env.TG_CHAT_ID || c.env.tgChatId || '';
-		return String(raw)
+	async parseAllowedChatIds(c) {
+		const envValue = c.env.CHAT_ID || c.env.TG_CHAT_ID || c.env.tgChatId;
+		let raw = envValue;
+		if (!raw) {
+			try {
+				const setting = await settingService.query(c);
+				raw = setting?.tgChatId;
+			} catch (e) {
+				console.error('Failed to load tgChatId from setting:', e.message);
+			}
+		}
+		return String(raw || '')
 			.split(',')
 			.map(item => item.trim())
 			.filter(Boolean);
 	},
 
-	isAllowedChat(c, chatId, userId) {
-		const allowed = this.parseAllowedChatIds(c);
+	async isAllowedChat(c, chatId, userId) {
+		const allowed = await this.parseAllowedChatIds(c);
 		if (allowed.length === 0) {
 			return false;
 		}
@@ -468,7 +477,7 @@ ${body}`;
 
 	async formatStatusCommand(c) {
 		const numberCount = await analysisDao.numberCount(c);
-		const allowed = this.parseAllowedChatIds(c);
+		const allowed = await this.parseAllowedChatIds(c);
 		const botEnabled = Boolean((await settingService.query(c)).tgBotToken);
 		return `📊 <b>/status</b>
 
@@ -490,8 +499,8 @@ Send Emails: ${numberCount.sendEmailCount}
 			return;
 		}
 
-		if (!this.isAllowedChat(c, chatId, userId)) {
-			const allowed = this.parseAllowedChatIds(c);
+		if (!await this.isAllowedChat(c, chatId, userId)) {
+			const allowed = await this.parseAllowedChatIds(c);
 			const msg = allowed.length === 0
 				? '⛔ Unauthorized\nReason: CHAT_ID allowlist is empty.'
 				: `⛔ Unauthorized\nAllowed: ${allowed.join(', ')}\nCurrent chat_id: ${chatId}${userId ? `\nCurrent user_id: ${userId}` : ''}`;
