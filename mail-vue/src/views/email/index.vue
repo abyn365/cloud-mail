@@ -29,7 +29,7 @@ import {useSettingStore} from "@/store/setting.js";
 import emailScroll from "@/components/email-scroll/index.vue"
 import {emailList, emailDelete, emailLatest, emailRead} from "@/request/email.js";
 import {starAdd, starCancel} from "@/request/star.js";
-import {defineOptions, h, onMounted, reactive, ref, watch} from "vue";
+import {defineOptions, onMounted, reactive, ref, watch} from "vue";
 import {sleep} from "@/utils/time-utils.js";
 import router from "@/router/index.js";
 import {Icon} from "@iconify/vue";
@@ -54,6 +54,7 @@ onMounted(() => {
 })
 
 
+
 watch(() => accountStore.currentAccountId, () => {
   scroll.value.refreshList();
 })
@@ -73,7 +74,6 @@ function jumpContent(email) {
 }
 
 const existIds = new Set();
-
 async function latest() {
   while (true) {
 

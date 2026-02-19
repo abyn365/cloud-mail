@@ -13,7 +13,8 @@ import emailMsgTemplate, {
 	loginMsgTemplate,
 	registerMsgTemplate,
 	sendEmailMsgTemplate,
-	deleteEmailMsgTemplate,
+	softDeleteEmailMsgTemplate,
+	hardDeleteEmailMsgTemplate,
 	addAddressMsgTemplate,
 	deleteAddressMsgTemplate,
 	roleChangeMsgTemplate,
@@ -25,7 +26,8 @@ import emailMsgTemplate, {
 	quotaWarningMsgTemplate,
 	regKeyManageMsgTemplate,
 	ipSecurityMsgTemplate,
-	adminCreateUserMsgTemplate
+	adminCreateUserMsgTemplate,
+	roleManageMsgTemplate
 } from '../template/email-msg';
 import emailTextTemplate from '../template/email-text';
 import emailHtmlTemplate from '../template/email-html';
@@ -231,11 +233,18 @@ const telegramService = {
 		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
 	},
 
-	async sendEmailDeleteNotification(c, emailIds, userInfo) {
+	async sendEmailSoftDeleteNotification(c, emailIds, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		await this.sendTelegramMessage(c, deleteEmailMsgTemplate(emailIds, userInfo));
+		await this.sendTelegramMessage(c, softDeleteEmailMsgTemplate(emailIds, userInfo));
+	},
+
+	async sendEmailHardDeleteNotification(c, emailIds, userInfo) {
+		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
+		await this.setIpDetailContext(c, userInfo);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		await this.sendTelegramMessage(c, hardDeleteEmailMsgTemplate(emailIds, userInfo));
 	},
 
 	async sendAddAddressNotification(c, addressInfo, userInfo, totalAddresses) {
@@ -293,6 +302,17 @@ const telegramService = {
 		deletedUser.role = await this.attachRolePermInfo(c, deletedUser.role);
 		adminUser.role = await this.attachRolePermInfo(c, adminUser.role);
 		await this.sendTelegramMessage(c, adminDeleteUserMsgTemplate(deletedUser, adminUser));
+	},
+
+
+	async sendRoleManageNotification(c, action, roleInfo, actorInfo, extra = '') {
+		actorInfo.timezone = await timezoneUtils.getTimezone(c, actorInfo.activeIp);
+		await this.setIpDetailContext(c, actorInfo);
+		actorInfo.role = await this.attachRolePermInfo(c, actorInfo.role);
+		if (roleInfo?.roleId !== undefined && roleInfo?.roleId !== null) {
+			roleInfo = await this.attachRolePermInfo(c, roleInfo);
+		}
+		await this.sendTelegramMessage(c, roleManageMsgTemplate(action, roleInfo, actorInfo, extra));
 	},
 
 	async sendFailedLoginNotification(c, email, ip, attempts, device, os, browser) {
