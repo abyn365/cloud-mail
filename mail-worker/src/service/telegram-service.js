@@ -52,8 +52,22 @@ const telegramService = {
 		return emailTextTemplate(emailRow.text || '');
 	},
 
+	async getBotToken(c) {
+		if (c.env.tgBotToken || c.env.TG_BOT_TOKEN) {
+			return c.env.tgBotToken || c.env.TG_BOT_TOKEN;
+		}
+		try {
+			const setting = await settingService.query(c);
+			return setting.tgBotToken;
+		} catch (e) {
+			console.error('Failed to load tgBotToken from setting:', e.message);
+			return null;
+		}
+	},
+
 	async sendTelegramMessage(c, message, reply_markup = null) {
-		const { tgBotToken, tgChatId } = await settingService.query(c);
+		const { tgChatId } = await settingService.query(c);
+		const tgBotToken = await this.getBotToken(c);
 		if (!tgBotToken || !tgChatId) return;
 		const tgChatIds = tgChatId.split(',');
 		await Promise.all(tgChatIds.map(async chatId => {
@@ -350,18 +364,21 @@ const telegramService = {
 	},
 
 	async sendTelegramReply(c, chatId, message) {
-		const { tgBotToken } = await settingService.query(c);
+		const tgBotToken = await this.getBotToken(c);
 		if (!tgBotToken) return;
 		const payload = {
 			chat_id: String(chatId),
 			parse_mode: 'HTML',
 			text: message,
 		};
-		await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
+		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(payload)
 		});
+		if (!res.ok) {
+			console.error(`Failed to send Telegram bot reply status: ${res.status} response: ${await res.text()}`);
+		}
 	},
 
 	async formatMailCommand(c) {
@@ -462,7 +479,7 @@ Send Emails: ${numberCount.sendEmailCount}
 	},
 
 	async handleBotWebhook(c, body) {
-		const message = body?.message;
+		const message = body?.message || body?.edited_message || body?.channel_post;
 		const text = message?.text?.trim();
 		const chatId = message?.chat?.id;
 		if (!text || !chatId) {
@@ -474,8 +491,11 @@ Send Emails: ${numberCount.sendEmailCount}
 			return;
 		}
 
+		const rawCommand = text.split(/\s+/)[0];
+		const command = rawCommand.includes('@') ? rawCommand.split('@')[0] : rawCommand;
+
 		let reply = '';
-		switch (text.split(' ')[0]) {
+		switch (command) {
 			case '/mail':
 				reply = await this.formatMailCommand(c);
 				break;
@@ -500,6 +520,9 @@ Send Emails: ${numberCount.sendEmailCount}
 /status`;
 		}
 
+		if (reply.length > 3800) {
+			reply = `${reply.slice(0, 3800)}\n\n...truncated`;
+		}
 		await this.sendTelegramReply(c, chatId, reply);
 	},
 
