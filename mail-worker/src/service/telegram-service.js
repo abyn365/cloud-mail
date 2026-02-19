@@ -48,16 +48,10 @@ const telegramService = {
 
 	// ─── HELPERS ──────────────────────────────────────────────────────────────
 
-	/**
-	 * Check if a user is admin based on env.admin
-	 */
 	isAdminUser(c, userEmail) {
 		return c.env.admin && userEmail && userEmail.toLowerCase() === c.env.admin.toLowerCase();
 	},
 
-	/**
-	 * Get effective role display info for a user, correctly handling admin
-	 */
 	async getEffectiveRoleDisplay(c, userRow) {
 		if (!userRow) return null;
 		if (this.isAdminUser(c, userRow.email)) {
@@ -85,9 +79,6 @@ const telegramService = {
 		}
 	},
 
-	/**
-	 * Format send limit for display, admin-aware
-	 */
 	formatSendLimit(roleInfo) {
 		if (!roleInfo) return 'Unknown';
 		if (roleInfo.isAdmin) return 'Unlimited (Admin)';
@@ -103,9 +94,6 @@ const telegramService = {
 		return 'Unlimited';
 	},
 
-	/**
-	 * Format address limit for display, admin-aware
-	 */
 	formatAddressLimit(roleInfo) {
 		if (!roleInfo) return 'Unknown';
 		if (roleInfo.isAdmin) return 'Unlimited (Admin)';
@@ -232,7 +220,8 @@ const telegramService = {
 		userInfo[targetField] = await this.queryIpSecurity(c, ip);
 	},
 
-	async queryIpSecurity(c, ip) {
+	// FIX #2: Tambah parameter options.noCache agar /whois tidak masuk risky board
+	async queryIpSecurity(c, ip, { noCache = false } = {}) {
 		if (!ip) return null;
 		try {
 			const cache = await c.env.db.prepare('SELECT data, update_time FROM ip_security_cache WHERE ip = ?').bind(ip).first();
@@ -269,14 +258,18 @@ const telegramService = {
 			console.error('Failed to query vpnapi.io:', e.message);
 			return detail;
 		}
-		try {
-			const now = dayjs().utc().format('YYYY-MM-DD HH:mm:ss');
-			await c.env.db.batch([
-				c.env.db.prepare('INSERT INTO ip_security_cache (ip, data, update_time) VALUES (?, ?, ?) ON CONFLICT(ip) DO UPDATE SET data = excluded.data, update_time = excluded.update_time').bind(ip, JSON.stringify(detail), now),
-				c.env.db.prepare('INSERT INTO ip_security_usage (usage_date, count, update_time) VALUES (?, 1, ?) ON CONFLICT(usage_date) DO UPDATE SET count = count + 1, update_time = excluded.update_time').bind(today, now)
-			]);
-		} catch (e) {
-			console.error('Failed to write ip cache:', e.message);
+		// FIX: Jika noCache=true (dipanggil dari /whois manual), jangan simpan ke DB
+		// sehingga IP tersebut tidak muncul di risky board
+		if (!noCache) {
+			try {
+				const now = dayjs().utc().format('YYYY-MM-DD HH:mm:ss');
+				await c.env.db.batch([
+					c.env.db.prepare('INSERT INTO ip_security_cache (ip, data, update_time) VALUES (?, ?, ?) ON CONFLICT(ip) DO UPDATE SET data = excluded.data, update_time = excluded.update_time').bind(ip, JSON.stringify(detail), now),
+					c.env.db.prepare('INSERT INTO ip_security_usage (usage_date, count, update_time) VALUES (?, 1, ?) ON CONFLICT(usage_date) DO UPDATE SET count = count + 1, update_time = excluded.update_time').bind(today, now)
+				]);
+			} catch (e) {
+				console.error('Failed to write ip cache:', e.message);
+			}
 		}
 		return detail;
 	},
@@ -328,7 +321,6 @@ const telegramService = {
 	async sendRegisterNotification(c, userInfo, accountCount, roleInfo = null) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.createIp);
 		await this.setIpDetailContext(c, userInfo, 'createIp');
-		// Use effective role display for the registered user
 		roleInfo = await this.attachRolePermInfo(c, roleInfo);
 		const message = registerMsgTemplate(userInfo, accountCount, roleInfo);
 		await this.emitWebhookEvent(c, 'auth.register', message, EVENT_LEVEL.INFO, { userId: userInfo?.userId, email: userInfo?.email });
@@ -410,7 +402,6 @@ const telegramService = {
 	},
 
 	async sendPasswordResetNotification(c, userInfo) {
-		// Uses sendPasswordChangeNotification with type 'reset' for full admin-aware alerting
 		return await this.sendPasswordChangeNotification(c, userInfo, 'reset');
 	},
 
@@ -557,6 +548,21 @@ const telegramService = {
 		});
 	},
 
+	// FIX #5: Helper untuk menghapus pesan user (command manual) agar tidak memenuhi layar
+	async deleteTelegramMessage(c, chatId, messageId) {
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken || !chatId || !messageId) return;
+		try {
+			await fetch(`https://api.telegram.org/bot${tgBotToken}/deleteMessage`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ chat_id: String(chatId), message_id: messageId })
+			});
+		} catch (e) {
+			// Abaikan error hapus pesan secara diam-diam
+		}
+	},
+
 	// ─── MENU BUILDERS ────────────────────────────────────────────────────────
 
 	buildMainMenu() {
@@ -695,13 +701,11 @@ const telegramService = {
 			return { text: `👤 <b>/user</b>\nUser #${userId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: `cmd:users:${backPage}` }) };
 		}
 
-		// ── FIX: Correctly identify admin user ──
 		const isAdmin = this.isAdminUser(c, userRow.email);
 
 		const roleRows = await orm(c).select().from(role);
 		const roleMap = new Map(roleRows.map(r => [r.roleId, r.name]));
 
-		// Get effective role with correct admin handling
 		let effectiveRoleInfo;
 		let roleName;
 		if (isAdmin) {
@@ -726,7 +730,6 @@ const telegramService = {
 		const sendLimit = this.formatSendLimit(effectiveRoleInfo);
 		const addressLimit = this.formatAddressLimit(effectiveRoleInfo);
 
-		// Get send count stats
 		const sendCountRow = await c.env.db.prepare(`
 			SELECT COUNT(*) as sendCount FROM email WHERE user_id = ? AND type = 1 AND is_del = 0
 		`).bind(userId).first();
@@ -737,7 +740,6 @@ const telegramService = {
 		const totalSendEmails = Number(sendCountRow?.sendCount || 0);
 		const totalReceiveEmails = Number(receiveCountRow?.receiveCount || 0);
 
-		// Build quota display
 		let quotaLine = '';
 		if (isAdmin) {
 			quotaLine = `📊 Send Quota: Unlimited (Admin)`;
@@ -763,7 +765,6 @@ const telegramService = {
 			? relatedAccounts.map(item => `• ${item.isDel ? '❌' : '✅'} account_id ${item.accountId}: ${item.email}`).join('\n')
 			: '-';
 
-		// Address quota
 		let addressQuotaLine = '';
 		if (isAdmin) {
 			addressQuotaLine = `📬 Address Quota: Unlimited (Admin)`;
@@ -819,7 +820,6 @@ ${this.formatActivityBlock(recent)}`;
 		return { text: detail, replyMarkup };
 	},
 
-	// Progress bar helper
 	buildProgressBar(pct, length = 10) {
 		const filled = Math.round((pct / 100) * length);
 		const empty = length - filled;
@@ -914,7 +914,6 @@ ${isAdmin ? '👑' : '🛡️'} Role: ${roleDisplay} | Status: ${this.mapUserSta
 		if (rows.length === 0) return `🛡️ <b>/role</b>\nNo role data.`;
 		const roleRows = await Promise.all(rows.map(async item => this.attachRolePermInfo(c, { ...item })));
 
-		// Count users per role
 		const roleIds = rows.map(r => r.roleId);
 		const placeholders = roleIds.map(() => '?').join(',');
 		const { results: userCounts } = await c.env.db.prepare(
@@ -947,7 +946,6 @@ ${isAdmin ? '👑' : '🛡️'} Role: ${roleDisplay} | Status: ${this.mapUserSta
 		const setting = await settingService.query(c);
 		const botEnabled = Boolean(setting.tgBotToken);
 
-		// Extra stats
 		const todayStr = dayjs.utc().format('YYYY-MM-DD');
 		const todayRegRow = await c.env.db.prepare(`SELECT COUNT(*) as cnt FROM user WHERE DATE(create_time) = ?`).bind(todayStr).first();
 		const todayReceiveRow = await c.env.db.prepare(`SELECT COUNT(*) as cnt FROM email WHERE type = 0 AND DATE(create_time) = ?`).bind(todayStr).first();
@@ -975,17 +973,22 @@ Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 	},
 
 	// ─── ENHANCED COMMAND: SECURITY ──────────────────────────────────────────
+	// FIX #1: Hanya tampilkan risky IPs yang terdaftar di tabel user (active_ip atau create_ip)
 
 	async formatSecurityCommand(c) {
 		const { results } = await c.env.db.prepare(`
-			SELECT ip, update_time, data
-			FROM ip_security_cache
-			WHERE
-				COALESCE(json_extract(data, '$.security.vpn'), 0) = 1
-				OR COALESCE(json_extract(data, '$.security.proxy'), 0) = 1
-				OR COALESCE(json_extract(data, '$.security.tor'), 0) = 1
-				OR COALESCE(json_extract(data, '$.security.relay'), 0) = 1
-			ORDER BY update_time DESC
+			SELECT isc.ip, isc.update_time, isc.data
+			FROM ip_security_cache isc
+			INNER JOIN user u ON (u.active_ip = isc.ip OR u.create_ip = isc.ip)
+			WHERE u.is_del = 0
+			  AND (
+			      COALESCE(json_extract(isc.data, '$.security.vpn'), 0) = 1
+			      OR COALESCE(json_extract(isc.data, '$.security.proxy'), 0) = 1
+			      OR COALESCE(json_extract(isc.data, '$.security.tor'), 0) = 1
+			      OR COALESCE(json_extract(isc.data, '$.security.relay'), 0) = 1
+			  )
+			GROUP BY isc.ip
+			ORDER BY isc.update_time DESC
 			LIMIT 10
 		`).all();
 
@@ -1059,13 +1062,15 @@ Tip: tap Security Event button or use <code>/security event &lt;id&gt;</code>.`,
 	},
 
 	// ─── WHOIS COMMAND ────────────────────────────────────────────────────────
+	// FIX #2: Gunakan noCache=true agar /whois tidak menambahkan IP ke risky board
 
 	async formatWhoisCommand(c, ipArg) {
 		const ip = String(ipArg || '').trim();
 		if (!ip || ip === 'help') {
 			return { text: `🌐 <b>/whois</b>\nUsage: <code>/whois 1.1.1.1</code>`, replyMarkup: this.buildMainMenu() };
 		}
-		const detail = await this.queryIpSecurity(c, ip);
+		// noCache=true: lookup saja, jangan simpan ke ip_security_cache
+		const detail = await this.queryIpSecurity(c, ip, { noCache: true });
 		const sec = detail?.security || {};
 		const loc = detail?.location || {};
 		const net = detail?.network || {};
@@ -1369,7 +1374,6 @@ ${logs || 'No logs yet.'}`;
 		const roleInfo = await orm(c).select().from(role).where(eq(role.roleId, item.roleId)).get();
 		const enrichedRole = roleInfo ? await this.attachRolePermInfo(c, { ...roleInfo }) : null;
 
-		// Usage history
 		const historyRows = await c.env.db.prepare(`
 			SELECT user_id as userId, email, create_time as createTime FROM user WHERE reg_key_id = ? ORDER BY user_id DESC LIMIT 5
 		`).bind(inviteId).all();
@@ -1403,6 +1407,7 @@ ${historyText}`;
 		const type = String(typeArg || '').toLowerCase();
 		const query = String((queryArgs || []).join(' ').trim());
 		if (!type) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
+		// FIX #2 also applies here: /search ip also uses noCache=true
 		if (type === 'ip') return await this.formatWhoisCommand(c, query);
 		if (type === 'email') return await this.formatMailDetailCommand(c, query, 1);
 		if (type === 'invite') {
@@ -1410,7 +1415,7 @@ ${historyText}`;
 			let row = null;
 			if (/^\d+$/.test(query)) row = await orm(c).select({ regKeyId: regKey.regKeyId }).from(regKey).where(eq(regKey.regKeyId, Number(query))).get();
 			if (!row) {
-				const byCode = await c.env.db.prepare('SELECT rege_key_id as regKeyId FROM reg_key WHERE code = ? LIMIT 1').bind(query).first();
+				const byCode = await c.env.db.prepare('SELECT reg_key_id as regKeyId FROM reg_key WHERE code = ? LIMIT 1').bind(query).first();
 				if (byCode) row = byCode;
 			}
 			if (!row?.regKeyId) return { text: `🔎 Invite not found: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
@@ -1610,7 +1615,6 @@ ${historyText}`;
 			replyMarkup: { inline_keyboard: [[{ text: '📈 Back to Stats', callback_data: 'cmd:stats:7d' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
 		};
 
-		// Count by status
 		const countByStatus = {};
 		items.forEach(item => { countByStatus[item.status] = (countByStatus[item.status] || 0) + 1; });
 		const summary = Object.entries(countByStatus).map(([s, n]) => `${statusLabel[s] || `Status ${s}`}: ${n}`).join(' | ');
@@ -1626,46 +1630,88 @@ ${historyText}`;
 	},
 
 	// ─── SECURITY: BLACKLIST MANAGEMENT ──────────────────────────────────────
-	// Integrated into /security as /security blacklist [add|remove] [email]
+	// FIX #3: Pastikan tabel ada, handle error dengan benar
 
 	async formatSecurityBlacklistCommand(c, subArg, targetArg) {
 		const sub = String(subArg || 'list').toLowerCase();
 		const target = String(targetArg || '').trim();
 
+		// Buat tabel jika belum ada
+		try {
+			await c.env.db.prepare(`
+				CREATE TABLE IF NOT EXISTS ban_email (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					email TEXT UNIQUE NOT NULL,
+					create_time TEXT DEFAULT (datetime('now'))
+				)
+			`).run();
+		} catch (e) {
+			// Tabel mungkin sudah ada, abaikan
+		}
+
 		if (sub === 'add' || sub === 'remove') {
-			if (!target) return { text: `🚫 Usage: <code>/security blacklist ${sub} email@example.com</code>`, replyMarkup: this.buildMainMenu() };
+			if (!target) return {
+				text: `🚫 Usage: <code>/security blacklist ${sub} email@example.com</code>`,
+				replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			};
+
 			if (sub === 'add') {
-				// Check if already blacklisted
-				const existing = await c.env.db.prepare('SELECT id FROM ban_email WHERE email = ?').bind(target).first();
-				if (existing) return { text: `🚫 <code>${target}</code> is already blacklisted.`, replyMarkup: this.buildMainMenu() };
-				await c.env.db.prepare('INSERT INTO ban_email (email, create_time) VALUES (?, datetime(\'now\'))').bind(target).run();
-				await this.logSystemEvent(c, 'admin.blacklist.add', EVENT_LEVEL.WARN, `Blacklisted: ${target}`, { email: target });
-				return { text: `✅ <b>Blacklisted</b> <code>${target}</code>`, replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] } };
+				try {
+					const existing = await c.env.db.prepare('SELECT id FROM ban_email WHERE email = ?').bind(target).first();
+					if (existing) return {
+						text: `🚫 <code>${target}</code> is already blacklisted.`,
+						replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+					};
+					await c.env.db.prepare("INSERT INTO ban_email (email, create_time) VALUES (?, datetime('now'))").bind(target).run();
+					await this.logSystemEvent(c, 'admin.blacklist.add', EVENT_LEVEL.WARN, `Blacklisted: ${target}`, { email: target });
+					return {
+						text: `✅ <b>Blacklisted</b> <code>${target}</code>`,
+						replyMarkup: { inline_keyboard: [[{ text: '🚫 View Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+					};
+				} catch (e) {
+					return { text: `❌ Failed to add to blacklist: ${e.message}`, replyMarkup: this.buildMainMenu() };
+				}
 			} else {
-				const res = await c.env.db.prepare('DELETE FROM ban_email WHERE email = ?').bind(target).run();
-				if (!res.meta?.changes) return { text: `⚠️ <code>${target}</code> not found in blacklist.`, replyMarkup: this.buildMainMenu() };
-				await this.logSystemEvent(c, 'admin.blacklist.remove', EVENT_LEVEL.INFO, `Removed from blacklist: ${target}`, { email: target });
-				return { text: `✅ <b>Removed from blacklist</b>: <code>${target}</code>`, replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] } };
+				try {
+					const res = await c.env.db.prepare('DELETE FROM ban_email WHERE email = ?').bind(target).run();
+					if (!res.meta?.changes) return {
+						text: `⚠️ <code>${target}</code> not found in blacklist.`,
+						replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+					};
+					await this.logSystemEvent(c, 'admin.blacklist.remove', EVENT_LEVEL.INFO, `Removed from blacklist: ${target}`, { email: target });
+					return {
+						text: `✅ <b>Removed from blacklist</b>: <code>${target}</code>`,
+						replyMarkup: { inline_keyboard: [[{ text: '🚫 View Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+					};
+				} catch (e) {
+					return { text: `❌ Failed to remove from blacklist: ${e.message}`, replyMarkup: this.buildMainMenu() };
+				}
 			}
 		}
 
 		// List view
-		const rows = await c.env.db.prepare('SELECT id, email, create_time as createTime FROM ban_email ORDER BY id DESC LIMIT 20').all();
-		const items = rows?.results || [];
-		const body = items.length
-			? items.map(r => `🚫 <code>${r.email}</code> — added ${r.createTime || '-'}`).join('\n')
-			: '✅ Blacklist is empty.';
+		try {
+			const rows = await c.env.db.prepare('SELECT id, email, create_time as createTime FROM ban_email ORDER BY id DESC LIMIT 20').all();
+			const items = rows?.results || [];
+			const body = items.length
+				? items.map(r => `🚫 <code>${r.email}</code> — added ${r.createTime || '-'}`).join('\n')
+				: '✅ Blacklist is empty.';
 
-		return {
-			text: `🚫 <b>Email Blacklist</b>\n\n${body}\n\n<b>Commands:</b>\n• <code>/security blacklist add email@ex.com</code>\n• <code>/security blacklist remove email@ex.com</code>`,
-			replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-		};
+			return {
+				text: `🚫 <b>Email Blacklist</b>\n\n${body}\n\n<b>Commands:</b>\n• <code>/security blacklist add email@ex.com</code>\n• <code>/security blacklist remove email@ex.com</code>`,
+				replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			};
+		} catch (e) {
+			return {
+				text: `🚫 <b>Email Blacklist</b>\n\nError loading blacklist: ${e.message}`,
+				replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			};
+		}
 	},
 
 	// ─── NEW NOTIFICATION: PASSWORD CHANGE ALERT ──────────────────────────────
 
 	async sendPasswordChangeNotification(c, userInfo, changeType = 'change') {
-		// changeType: 'change' (user changed own password) | 'reset' (forgot password flow)
 		const isAdmin = this.isAdminUser(c, userInfo.email);
 		const roleRow = await this.getRoleById(c, userInfo.type);
 		const isSiteAdmin = roleRow?.roleId === 2;
@@ -1685,13 +1731,11 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 		await this.logSystemEvent(c, eventType, level, message, { userId: userInfo.userId, email: userInfo.email, changeType });
 
 		if (isPrivileged) {
-			// Loud alert for admin/site-admin password changes — push immediately like failed login
 			await this.sendSecurityEventAlert(c,
 				`⚠️ ${typeLabel}: <b>${userInfo.email}</b>`,
 				`Role: ${roleLabel}${ipInfo}`
 			);
 		} else {
-			// Normal push for regular users
 			await this.sendTelegramMessage(c, message);
 		}
 	},
@@ -1784,10 +1828,8 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 			case '/unban':
 				return await this.formatBanUserCommand(c, args?.[0], 'unban');
 			case '/search':
-			case '/searchs': // alias kept for backwards compat
-				// bare /search or /searchs with no args → show search menu
+			case '/searchs':
 				if (!args?.[0]) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
-				// /search user → show user-specific help
 				if (['user','email','invite','role','ip'].includes(args[0]) && !args[1]) {
 					return { text: this.formatSearchHelp(args[0]), replyMarkup: this.buildSearchMenu() };
 				}
@@ -1798,6 +1840,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 	},
 
 	// ─── WEBHOOK HANDLER ──────────────────────────────────────────────────────
+	// FIX #5: Hapus pesan command user setelah dibalas (agar layar tidak penuh)
 
 	async handleBotWebhook(c, body) {
 		const callback = body?.callback_query;
@@ -1834,9 +1877,9 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 					command = '/invite'; args = ['detail', m[1], m[2]];
 				} else if (/^cmd:searchhelp:(user|email|invite|role)$/.test(callback.data)) {
 					const m = /^cmd:searchhelp:(user|email|invite|role)$/.exec(callback.data);
-					command = '/search'; args = [m[1]]; // show subtype help, no query → help screen
+					command = '/search'; args = [m[1]];
 				} else if (callback.data === 'cmd:search') {
-					command = '/search'; // bare search → show menu
+					command = '/search';
 				} else if (/^cmd:usermail:(\d+):(\d+)$/.test(callback.data)) {
 					const m = /^cmd:usermail:(\d+):(\d+)$/.exec(callback.data);
 					command = '/usermail'; args = [m[1], m[2]];
@@ -1844,7 +1887,6 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 					const m = /^cmd:usermail:(\d+)$/.exec(callback.data);
 					command = '/usermail'; args = [m[1], '1'];
 				} else if (/^cmd:banuser:(\d+)$/.test(callback.data)) {
-					// Shows ban/unban toggle UI — check current status then act
 					const m = /^cmd:banuser:(\d+)$/.exec(callback.data);
 					const uid = Number(m[1]);
 					const uRow = await c.env.db.prepare('SELECT status FROM user WHERE user_id = ?').bind(uid).first();
@@ -1891,6 +1933,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 		const text = message?.text?.trim();
 		const chatId = message?.chat?.id;
 		const userId = message?.from?.id;
+		const userMessageId = message?.message_id; // FIX #5: simpan message_id user
 		if (!text || !chatId) return;
 
 		if (!await this.isAllowedChat(c, chatId, userId)) {
@@ -1912,7 +1955,15 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 		const result = await this.resolveCommand(c, command, argParts, chatId, userId);
 		let reply = result.text;
 		if (reply.length > 3800) reply = `${reply.slice(0, 3800)}\n\n...truncated`;
+
+		// FIX #5: Kirim balasan bot dulu, lalu hapus pesan command user
 		await this.sendTelegramReply(c, chatId, reply, result.replyMarkup);
+
+		// Hapus pesan command user agar tidak memenuhi layar
+		// Hanya hapus jika bukan channel post (channel tidak bisa dihapus oleh bot)
+		if (userMessageId && message?.from?.id) {
+			await this.deleteTelegramMessage(c, chatId, userMessageId);
+		}
 	},
 };
 
