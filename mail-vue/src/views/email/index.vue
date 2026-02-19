@@ -50,7 +50,13 @@ const params = reactive({
 
 onMounted(() => {
   emailStore.emailScroll = scroll;
+  syncBrowserNotifyOptIn()
+  window.addEventListener(browserNotifyEvent, onBrowserNotifyChange)
   latest()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener(browserNotifyEvent, onBrowserNotifyChange)
 })
 
 
@@ -111,6 +117,7 @@ async function latest() {
 
                 existIds.add(email.emailId)
                 scroll.value.addItem(email)
+                await sendBrowserNotification(email)
 
                 await sleep(50)
               }
