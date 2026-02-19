@@ -375,6 +375,49 @@ const telegramService = {
 		return allowed.includes(chatIdStr) || (userIdStr && allowed.includes(userIdStr));
 	},
 
+
+	buildWebhookUrl(c) {
+		const url = new URL(c.req.url);
+		url.pathname = '/api/telegram/webhook';
+		url.search = '';
+		url.hash = '';
+		return url.toString();
+	},
+
+	async getWebhookInfo(c) {
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken) {
+			return { ok: false, description: 'Bot token is empty' };
+		}
+		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/getWebhookInfo`);
+		const data = await res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
+		return data;
+	},
+
+	async setWebhook(c) {
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken) {
+			return { ok: false, description: 'Bot token is empty' };
+		}
+		const webhookUrl = this.buildWebhookUrl(c);
+		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/setWebhook`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ url: webhookUrl, allowed_updates: ['message', 'edited_message', 'channel_post'] })
+		});
+		const data = await res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
+		return { ...data, webhookUrl };
+	},
+
+	async deleteWebhook(c) {
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken) {
+			return { ok: false, description: 'Bot token is empty' };
+		}
+		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/deleteWebhook`);
+		const data = await res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
+		return data;
+	},
 	async sendTelegramReply(c, chatId, message) {
 		const tgBotToken = await this.getBotToken(c);
 		if (!tgBotToken) return;
