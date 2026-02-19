@@ -239,7 +239,6 @@ const telegramService = {
 		userInfo[targetField] = await this.queryIpSecurity(c, ip);
 	},
 
-	// FIX #2: Tambah parameter options.noCache agar /whois tidak masuk risky board
 	async queryIpSecurity(c, ip, { noCache = false } = {}) {
 		if (!ip) return null;
 		try {
@@ -277,8 +276,6 @@ const telegramService = {
 			console.error('Failed to query vpnapi.io:', e.message);
 			return detail;
 		}
-		// FIX: Jika noCache=true (dipanggil dari /whois manual), jangan simpan ke DB
-		// sehingga IP tersebut tidak muncul di risky board
 		if (!noCache) {
 			try {
 				const now = dayjs().utc().format('YYYY-MM-DD HH:mm:ss');
@@ -630,7 +627,6 @@ const telegramService = {
 		return { messageId: messageId || null, edited: false };
 	},
 
-	// FIX #5: Helper untuk menghapus pesan user (command manual) agar tidak memenuhi layar
 	async deleteTelegramMessage(c, chatId, messageId) {
 		const tgBotToken = await this.getBotToken(c);
 		if (!tgBotToken || !chatId || !messageId) return;
@@ -641,7 +637,7 @@ const telegramService = {
 				body: JSON.stringify({ chat_id: String(chatId), message_id: messageId })
 			});
 		} catch (e) {
-			// Abaikan error hapus pesan secara diam-diam
+			// Ignore silently
 		}
 	},
 
@@ -875,7 +871,7 @@ const telegramService = {
 ${isAdmin ? '👑' : '🛡️'} Role: <b>${roleName}</b>
 📊 Status: ${this.mapUserStatusLabel(userRow.status)} | Deleted: ${userRow.isDel ? 'Yes' : 'No'}
 
-<b>📈 Quotas & Limits</b>
+<b>📈 Quotas &amp; Limits</b>
 ${quotaLine}
 ${addressQuotaLine}
 📧 Send Limit: ${sendLimit}
@@ -1055,7 +1051,6 @@ Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 	},
 
 	// ─── ENHANCED COMMAND: SECURITY ──────────────────────────────────────────
-	// FIX #1: Hanya tampilkan risky IPs yang terdaftar di tabel user (active_ip atau create_ip)
 
 	async formatSecurityCommand(c) {
 		const { results } = await c.env.db.prepare(`
@@ -1086,6 +1081,7 @@ Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 			}).join('\n');
 		}
 
+		// Failed login events
 		const failedRows = await c.env.db.prepare(`
 			SELECT log_id as logId, message, create_time as createTime
 			FROM webhook_event_log
@@ -1099,10 +1095,31 @@ Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 			return `• #${item.logId} ${oneLine}\n  At: ${item.createTime || '-'}`;
 		}).join('\n');
 
+		// ─── NEW: Blacklisted sender blocked events ───────────────────────────
+		const blacklistRows = await c.env.db.prepare(`
+			SELECT log_id as logId, message, meta, create_time as createTime
+			FROM webhook_event_log
+			WHERE event_type = 'security.blacklist.blocked'
+			ORDER BY log_id DESC
+			LIMIT 5
+		`).all();
+		const blacklistItems = blacklistRows?.results || [];
+		const blacklistPreview = blacklistItems.length
+			? blacklistItems.map(item => {
+				let meta = {};
+				try { meta = JSON.parse(item.meta || '{}'); } catch (_) {}
+				return `• #${item.logId} From: <code>${meta.senderEmail || '-'}</code> → <code>${meta.to || '-'}</code>\n  Rule: ${meta.matchedRule || '-'} | At: ${item.createTime || '-'}`;
+			}).join('\n')
+			: '-';
+		// ─────────────────────────────────────────────────────────────────────
+
 		const securityButtons = failedItems.map(item => ([{ text: `🧾 Security Event #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }]));
+		const blacklistButtons = blacklistItems.map(item => ([{ text: `🚫 Blocked #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }]));
+
 		const replyMarkup = {
 			inline_keyboard: [
 				...securityButtons,
+				...blacklistButtons,
 				[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }],
 				[{ text: '🏠 Menu', callback_data: 'cmd:menu' }]
 			]
@@ -1115,6 +1132,9 @@ ${linesText}
 
 <b>⚠️ Recent failed login events</b>
 ${failedPreview || '-'}
+
+<b>🚫 Recent blacklisted sender blocks</b>
+${blacklistPreview}
 
 Tip: tap Security Event button or use <code>/security event &lt;id&gt;</code>.`, replyMarkup };
 	},
@@ -1144,14 +1164,12 @@ Tip: tap Security Event button or use <code>/security event &lt;id&gt;</code>.`,
 	},
 
 	// ─── WHOIS COMMAND ────────────────────────────────────────────────────────
-	// FIX #2: Gunakan noCache=true agar /whois tidak menambahkan IP ke risky board
 
 	async formatWhoisCommand(c, ipArg) {
 		const ip = String(ipArg || '').trim();
 		if (!ip || ip === 'help') {
 			return { text: `🌐 <b>/whois</b>\nUsage: <code>/whois 1.1.1.1</code>`, replyMarkup: this.buildMainMenu() };
 		}
-		// noCache=true: lookup saja, jangan simpan ke ip_security_cache
 		const detail = await this.queryIpSecurity(c, ip, { noCache: true });
 		const sec = detail?.security || {};
 		const loc = detail?.location || {};
@@ -1489,7 +1507,6 @@ ${historyText}`;
 		const type = String(typeArg || '').toLowerCase();
 		const query = String((queryArgs || []).join(' ').trim());
 		if (!type) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
-		// FIX #2 also applies here: /search ip also uses noCache=true
 		if (type === 'ip') return await this.formatWhoisCommand(c, query);
 		if (type === 'email') return await this.formatMailDetailCommand(c, query, 1);
 		if (type === 'invite') {
@@ -1712,7 +1729,6 @@ ${historyText}`;
 	},
 
 	// ─── SECURITY: BLACKLIST MANAGEMENT ──────────────────────────────────────
-	// FIX #3: Pastikan tabel ada, handle error dengan benar
 
 	async formatSecurityBlacklistCommand(c, subArg, targetArg) {
 		const sub = String(subArg || 'list').toLowerCase();
@@ -1833,31 +1849,57 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 			case '/start':
 			case '/help':
 				return {
-					text: `🤖 <b>Cloud Mail Bot Commands</b>
+					text: `🤖 <b>Abyn Mail Bot — Command Center</b>
 
-help - show commands
-status - bot info
-system - system status
-search - quick search system
-security - show suspicious activity
-events - show events
-whois - search ip
-stats - view stats
-mail - all mail info
-users - users info
-role - roles info
-invite - invite code info
-chatid - get chat id
+📊 /status — System counters + bot state
+👥 /users [page] — Users list with quota info
+📨 /mail [page|emailId] — Emails with pager or detail
+📬 /recent — Last 10 emails across all users
+🛡️ /role — Role quota + authorization flags
+🔐 /security — Risky IPs, failed logins, blacklist
+🌐 /whois &lt;ip&gt; — IP intelligence lookup
+📈 /stats [range|top|bounce] — Email &amp; user stats
+🧭 /system — Webhook health + event logs
+🗂 /events [page] — Webhook/system event log
+🧾 /event &lt;id&gt; — Event detail + preview
+👤 /user &lt;id&gt; — User detail with role, quota, progress bars
+📧 /usermail &lt;userId&gt; [page] — List a user's emails
+🔄 /resetquota &lt;userId&gt; — Reset user send quota to 0
+🎟️ /invite [page] — Invite codes with usage history
+🔎 /search [type] [query] — Search user/email/invite/role/ip
+🚫 /ban &lt;userId&gt; — Ban a user
+✅ /unban &lt;userId&gt; — Unban a user
+🆔 /chatid — Your chat_id / user_id
 
-🌐 <b>/whois</b>
-Usage: <code>/whois 1.1.1.1</code>
+━━━━━━━━━━━━━━━━━━━━
+📌 <b>Subcommands &amp; Examples</b>
 
-🔐 <b>/security</b>
-• <code>/security</code>
-• <code>/security event &lt;id&gt;</code>
-• <code>/security blacklist add email@ex.com</code>
-• <code>/security blacklist add domain.com</code>
-• <code>/security blacklist remove email@ex.com</code>`,
+👤 <b>User</b>
+• <code>/user 1</code> — detail user #1
+• <code>/usermail 5 2</code> — emails of user #5, page 2
+• <code>/resetquota 5</code> — reset send quota user #5
+• <code>/ban 5</code> / <code>/unban 5</code>
+
+📈 <b>Stats</b>
+• <code>/stats 7d</code> — last 7 days (default)
+• <code>/stats 14d</code> — last 14 days
+• <code>/stats top</code> — top senders/receivers
+• <code>/stats bounce</code> — bounced/failed emails
+
+🔐 <b>Security</b>
+• <code>/security</code> — overview dashboard
+• <code>/security event &lt;id&gt;</code> — event detail
+• <code>/security blacklist add spammer@evil.com</code>
+• <code>/security blacklist add evil.com</code>
+• <code>/security blacklist remove spammer@evil.com</code>
+
+🔎 <b>Search</b>
+• <code>/search user abyn@abyn.xyz</code>
+• <code>/search user 5</code> — by user ID
+• <code>/search email 121</code> — by email ID
+• <code>/search invite CODE123</code>
+• <code>/search role admin</code>
+• <code>/search ip 1.2.3.4</code>`,
 					replyMarkup: this.buildMainMenu()
 				};
 			case '/recent':
@@ -1920,7 +1962,6 @@ Usage: <code>/whois 1.1.1.1</code>
 	},
 
 	// ─── WEBHOOK HANDLER ──────────────────────────────────────────────────────
-	// FIX #5: Hapus pesan command user setelah dibalas (agar layar tidak penuh)
 
 	async handleBotWebhook(c, body) {
 		const callback = body?.callback_query;
@@ -2014,7 +2055,7 @@ Usage: <code>/whois 1.1.1.1</code>
 		const text = message?.text?.trim();
 		const chatId = message?.chat?.id;
 		const userId = message?.from?.id;
-		const userMessageId = message?.message_id; // FIX #5: simpan message_id user
+		const userMessageId = message?.message_id;
 		if (!text || !chatId) return;
 
 		if (!await this.isAllowedChat(c, chatId, userId)) {
@@ -2037,11 +2078,8 @@ Usage: <code>/whois 1.1.1.1</code>
 		let reply = result.text;
 		if (reply.length > 3800) reply = `${reply.slice(0, 3800)}\n\n...truncated`;
 
-		// FIX #5: Kirim balasan bot dulu, lalu hapus pesan command user
 		await this.sendOrEditSingleChatMessage(c, chatId, reply, result.replyMarkup);
 
-		// Hapus pesan command user agar tidak memenuhi layar
-		// Hanya hapus jika bukan channel post (channel tidak bisa dihapus oleh bot)
 		if (userMessageId && message?.from?.id) {
 			await this.deleteTelegramMessage(c, chatId, userMessageId);
 		}
