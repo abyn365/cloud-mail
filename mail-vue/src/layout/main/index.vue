@@ -13,12 +13,16 @@
 import account from '@/layout/account/index.vue'
 import {useUiStore} from "@/store/ui.js";
 import {useSettingStore} from "@/store/setting.js";
+import {useAccountStore} from "@/store/account.js";
+import {emailLatest} from "@/request/email.js";
+import {sleep} from "@/utils/time-utils.js";
 import {computed, onBeforeUnmount, onMounted, watch} from "vue";
 import { useRoute } from 'vue-router'
 import { hasPerm } from "@/perm/perm.js"
 import { sanitizeHtml } from '@/utils/html-sanitize.js'
 
 const settingStore = useSettingStore()
+const accountStore = useAccountStore()
 const uiStore = useUiStore();
 const route = useRoute()
 let  innerWidth =  window.innerWidth
@@ -85,9 +89,107 @@ function showNotice(data) {
   })
 }
 
+
+let latestNotifyEmailId = 0
+let notifyLoopStarted = false
+
+function canSendBrowserNotification() {
+  return localStorage.getItem('browser-notify-opt-in') === '1' && ('Notification' in window) && Notification.permission === 'granted'
+}
+
+async function sendBrowserNotification(email) {
+  if (!canSendBrowserNotification()) {
+    return
+  }
+
+  const title = email.subject || 'New email received'
+  const body = `${email.name || email.sendEmail || 'Unknown sender'}`
+  const options = {
+    body,
+    icon: '/mail-pwa.png',
+    badge: '/mail-pwa.png',
+    tag: `mail-${email.emailId}`,
+    data: { url: '/inbox' }
+  }
+
+  if ('serviceWorker' in navigator) {
+    try {
+      const registration = await navigator.serviceWorker.ready
+      await registration.showNotification(title, options)
+      return
+    } catch (e) {
+      console.error('Failed to show notification via service worker:', e)
+    }
+  }
+
+  const notification = new Notification(title, options)
+  notification.onclick = () => {
+    window.focus()
+  }
+}
+
+async function syncNotifyBaseline() {
+  const accountId = accountStore.currentAccountId
+  const allReceive = accountStore.currentAccount?.allReceive
+
+  if (!accountId || allReceive === undefined || allReceive === null) {
+    return
+  }
+
+  try {
+    const list = await emailLatest(0, accountId, allReceive)
+    if (list.length > 0) {
+      latestNotifyEmailId = Math.max(...list.map(item => item.emailId || 0))
+    }
+  } catch (e) {
+    console.error('Failed to sync notification baseline:', e)
+  }
+}
+
+async function startGlobalNotifyLoop() {
+  if (notifyLoopStarted) return
+  notifyLoopStarted = true
+
+  await syncNotifyBaseline()
+
+  while (true) {
+    await sleep(5000)
+
+    if (!canSendBrowserNotification()) {
+      continue
+    }
+
+    const accountId = accountStore.currentAccountId
+    const allReceive = accountStore.currentAccount?.allReceive
+
+    if (!accountId || allReceive === undefined || allReceive === null) {
+      continue
+    }
+
+    try {
+      const list = await emailLatest(latestNotifyEmailId, accountId, allReceive)
+      if (list.length === 0) {
+        continue
+      }
+
+      const sortedList = list.slice().sort((a, b) => a.emailId - b.emailId)
+
+      for (const email of sortedList) {
+        if (email.emailId > latestNotifyEmailId) {
+          await sendBrowserNotification(email)
+          latestNotifyEmailId = email.emailId
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch latest email notifications:', e)
+    }
+  }
+}
+
 onMounted(() => {
   window.addEventListener('resize', handleResize)
   handleResize()
+  startGlobalNotifyLoop()
 })
 
 onBeforeUnmount(() => {

@@ -1,19 +1,23 @@
 import orm from '../entity/orm';
 import email from '../entity/email';
+import role from '../entity/role';
+import user from '../entity/user';
+import regKey from '../entity/reg-key';
 import settingService from './setting-service';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 dayjs.extend(utc);
 dayjs.extend(timezone);
-import { eq } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import jwtUtils from '../utils/jwt-utils';
 import timezoneUtils from '../utils/timezone-utils';
 import emailMsgTemplate, {
 	loginMsgTemplate,
 	registerMsgTemplate,
 	sendEmailMsgTemplate,
-	deleteEmailMsgTemplate,
+	softDeleteEmailMsgTemplate,
+	hardDeleteEmailMsgTemplate,
 	addAddressMsgTemplate,
 	deleteAddressMsgTemplate,
 	roleChangeMsgTemplate,
@@ -25,11 +29,13 @@ import emailMsgTemplate, {
 	quotaWarningMsgTemplate,
 	regKeyManageMsgTemplate,
 	ipSecurityMsgTemplate,
-	adminCreateUserMsgTemplate
+	adminCreateUserMsgTemplate,
+	roleManageMsgTemplate
 } from '../template/email-msg';
 import emailTextTemplate from '../template/email-text';
 import emailHtmlTemplate from '../template/email-html';
 import domainUtils from '../utils/domain-uitls';
+import analysisDao from '../dao/analysis-dao';
 
 const telegramService = {
 
@@ -46,8 +52,23 @@ const telegramService = {
 		return emailTextTemplate(emailRow.text || '');
 	},
 
+	async getBotToken(c) {
+		const envToken = c.env.BOT_TOKEN || c.env.bot_token || c.env.TG_BOT_TOKEN || c.env.tgBotToken;
+		if (envToken) {
+			return envToken;
+		}
+		try {
+			const setting = await settingService.query(c);
+			return setting.tgBotToken;
+		} catch (e) {
+			console.error('Failed to load tgBotToken from setting:', e.message);
+			return null;
+		}
+	},
+
 	async sendTelegramMessage(c, message, reply_markup = null) {
-		const { tgBotToken, tgChatId } = await settingService.query(c);
+		const { tgChatId } = await settingService.query(c);
+		const tgBotToken = await this.getBotToken(c);
 		if (!tgBotToken || !tgChatId) return;
 		const tgChatIds = tgChatId.split(',');
 		await Promise.all(tgChatIds.map(async chatId => {
@@ -231,11 +252,18 @@ const telegramService = {
 		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
 	},
 
-	async sendEmailDeleteNotification(c, emailIds, userInfo) {
+	async sendEmailSoftDeleteNotification(c, emailIds, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		await this.sendTelegramMessage(c, deleteEmailMsgTemplate(emailIds, userInfo));
+		await this.sendTelegramMessage(c, softDeleteEmailMsgTemplate(emailIds, userInfo));
+	},
+
+	async sendEmailHardDeleteNotification(c, emailIds, userInfo) {
+		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
+		await this.setIpDetailContext(c, userInfo);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
+		await this.sendTelegramMessage(c, hardDeleteEmailMsgTemplate(emailIds, userInfo));
 	},
 
 	async sendAddAddressNotification(c, addressInfo, userInfo, totalAddresses) {
@@ -295,6 +323,20 @@ const telegramService = {
 		await this.sendTelegramMessage(c, adminDeleteUserMsgTemplate(deletedUser, adminUser));
 	},
 
+
+	async sendRoleManageNotification(c, action, roleInfo, actorInfo, extra = '') {
+		actorInfo.timezone = await timezoneUtils.getTimezone(c, actorInfo.activeIp);
+		await this.setIpDetailContext(c, actorInfo);
+		actorInfo.role = await this.attachRolePermInfo(c, actorInfo.role);
+
+		if (roleInfo?.roleId !== undefined && roleInfo?.roleId !== null) {
+			const roleRow = await orm(c).select().from(role).where(eq(role.roleId, roleInfo.roleId)).get();
+			roleInfo = await this.attachRolePermInfo(c, roleRow || roleInfo);
+		}
+
+		await this.sendTelegramMessage(c, roleManageMsgTemplate(action, roleInfo, actorInfo, extra));
+	},
+
 	async sendFailedLoginNotification(c, email, ip, attempts, device, os, browser) {
 		const userTimezone = await timezoneUtils.getTimezone(c, ip);
 		const ipDetail = await this.queryIpSecurity(c, ip);
@@ -304,7 +346,195 @@ const telegramService = {
 	async sendQuotaWarningNotification(c, userInfo, quotaType) {
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		await this.sendTelegramMessage(c, quotaWarningMsgTemplate(userInfo, quotaType));
-	}
+	},
+
+	parseAllowedChatIds(c) {
+		const raw = c.env.CHAT_ID || c.env.TG_CHAT_ID || c.env.tgChatId || '';
+		return String(raw)
+			.split(',')
+			.map(item => item.trim())
+			.filter(Boolean);
+	},
+
+	isAllowedChat(c, chatId, userId) {
+		const allowed = this.parseAllowedChatIds(c);
+		if (allowed.length === 0) {
+			return false;
+		}
+		const chatIdStr = String(chatId);
+		const userIdStr = userId !== undefined && userId !== null ? String(userId) : null;
+		return allowed.includes(chatIdStr) || (userIdStr && allowed.includes(userIdStr));
+	},
+
+	async sendTelegramReply(c, chatId, message) {
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken) return;
+		const payload = {
+			chat_id: String(chatId),
+			parse_mode: 'HTML',
+			text: message,
+		};
+		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload)
+		});
+		if (!res.ok) {
+			console.error(`Failed to send Telegram bot reply status: ${res.status} response: ${await res.text()}`);
+		}
+	},
+
+	async formatMailCommand(c) {
+		const rows = await orm(c).select({
+			emailId: email.emailId,
+			sendEmail: email.sendEmail,
+			toEmail: email.toEmail,
+			subject: email.subject,
+			type: email.type,
+			isDel: email.isDel,
+			createTime: email.createTime,
+		}).from(email).orderBy(desc(email.emailId)).limit(20);
+
+		if (rows.length === 0) return `📭 <b>/mail</b>
+No email data.`;
+		const body = rows.map(item => `🆔 <code>${item.emailId}</code> | ${item.type === 0 ? 'RECV' : 'SEND'} | del=${item.isDel}
+From: <code>${item.sendEmail || '-'}</code>
+To: <code>${item.toEmail || '-'}</code>
+Subj: ${item.subject || '-'}
+At: ${item.createTime}`).join('\n\n');
+		return `📨 <b>/mail</b> (last 20)
+
+${body}`;
+	},
+
+	async formatUsersCommand(c) {
+		const rows = await orm(c).select({
+			userId: user.userId,
+			email: user.email,
+			status: user.status,
+			isDel: user.isDel,
+			type: user.type,
+			sendCount: user.sendCount,
+			createTime: user.createTime,
+		}).from(user).orderBy(desc(user.userId)).limit(20);
+		if (rows.length === 0) return `👤 <b>/users</b>
+No user data.`;
+		const roleRows = await orm(c).select().from(role);
+		const map = new Map(roleRows.map(r => [r.roleId, r.name]));
+		const body = rows.map(item => `🆔 <code>${item.userId}</code> ${item.email}
+Role: ${map.get(item.type) || (item.type === 0 ? 'admin' : 'unknown')} | Status: ${item.status} | Deleted: ${item.isDel}
+Send Count: ${item.sendCount || 0} | Created: ${item.createTime || '-'}`).join('\n\n');
+		return `👥 <b>/users</b> (first 20)
+
+${body}`;
+	},
+
+	async formatRoleCommand(c) {
+		const rows = await orm(c).select().from(role);
+		if (rows.length === 0) return `🛡️ <b>/role</b>
+No role data.`;
+		const body = rows.map(item => `🆔 <code>${item.roleId}</code> ${item.name}
+Send: ${item.sendType || '-'} / ${item.sendCount ?? 'Unlimited'}
+Address limit: ${item.accountCount ?? 'Unlimited'}
+Default: ${item.isDefault ? 'Yes' : 'No'}
+Ban email: ${item.banEmail || '-'}
+Avail domain: ${item.availDomain || '-'}`).join('\n\n');
+		return `🛡️ <b>/role</b>
+
+${body}`;
+	},
+
+	async formatInviteCommand(c) {
+		const rows = await orm(c).select({
+			regKeyId: regKey.regKeyId,
+			code: regKey.code,
+			count: regKey.count,
+			roleId: regKey.roleId,
+			expireTime: regKey.expireTime,
+			createTime: regKey.createTime,
+		}).from(regKey).orderBy(desc(regKey.regKeyId)).limit(30);
+		if (rows.length === 0) return `🎟️ <b>/invite</b>
+No invite code data.`;
+		const roleRows = await orm(c).select().from(role);
+		const map = new Map(roleRows.map(r => [r.roleId, r.name]));
+		const body = rows.map(item => `🆔 <code>${item.regKeyId}</code> <code>${item.code}</code>
+Role: ${map.get(item.roleId) || item.roleId}
+Remaining: ${item.count} | Expire: ${item.expireTime || '-'}
+Created: ${item.createTime || '-'}`).join('\n\n');
+		return `🎟️ <b>/invite</b>
+
+${body}`;
+	},
+
+	async formatStatusCommand(c) {
+		const numberCount = await analysisDao.numberCount(c);
+		const allowed = this.parseAllowedChatIds(c);
+		const botEnabled = Boolean((await settingService.query(c)).tgBotToken);
+		return `📊 <b>/status</b>
+
+Users: ${numberCount.userCount}
+Accounts: ${numberCount.accountCount}
+Receive Emails: ${numberCount.receiveEmailCount}
+Send Emails: ${numberCount.sendEmailCount}
+
+🤖 Bot enabled: ${botEnabled ? 'Yes' : 'No'}
+🔐 Allowed CHAT_ID: ${allowed.length > 0 ? allowed.join(', ') : '(empty)'}`;
+	},
+
+	async handleBotWebhook(c, body) {
+		const message = body?.message || body?.edited_message || body?.channel_post;
+		const text = message?.text?.trim();
+		const chatId = message?.chat?.id;
+		const userId = message?.from?.id;
+		if (!text || !chatId) {
+			return;
+		}
+
+		if (!this.isAllowedChat(c, chatId, userId)) {
+			const allowed = this.parseAllowedChatIds(c);
+			const msg = allowed.length === 0
+				? '⛔ Unauthorized\nReason: CHAT_ID allowlist is empty.'
+				: `⛔ Unauthorized\nAllowed: ${allowed.join(', ')}\nCurrent chat_id: ${chatId}${userId ? `\nCurrent user_id: ${userId}` : ''}`;
+			await this.sendTelegramReply(c, chatId, msg);
+			return;
+		}
+
+		const rawCommand = text.split(/\s+/)[0];
+		const command = rawCommand.includes('@') ? rawCommand.split('@')[0] : rawCommand;
+		console.log(`Telegram bot command received chat_id=${chatId} user_id=${userId || '-'} command=${command}`);
+
+		let reply = '';
+		switch (command) {
+			case '/mail':
+				reply = await this.formatMailCommand(c);
+				break;
+			case '/users':
+				reply = await this.formatUsersCommand(c);
+				break;
+			case '/role':
+				reply = await this.formatRoleCommand(c);
+				break;
+			case '/invite':
+				reply = await this.formatInviteCommand(c);
+				break;
+			case '/status':
+				reply = await this.formatStatusCommand(c);
+				break;
+			default:
+				reply = `📌 Commands:
+/mail
+/users
+/role
+/invite
+/status`;
+		}
+
+		if (reply.length > 3800) {
+			reply = `${reply.slice(0, 3800)}\n\n...truncated`;
+		}
+		await this.sendTelegramReply(c, chatId, reply);
+	},
+
 };
 
 export default telegramService;
