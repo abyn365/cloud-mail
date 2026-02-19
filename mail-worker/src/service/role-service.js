@@ -10,6 +10,7 @@ import user from '../entity/user';
 import verifyUtils from '../utils/verify-utils';
 import { t } from '../i18n/i18n.js';
 import emailUtils from '../utils/email-utils';
+import telegramService from './telegram-service';
 
 const roleService = {
 
@@ -35,15 +36,13 @@ const roleService = {
 
 		roleRow = await orm(c).insert(role).values({...params, banEmail, availDomain, userId}).returning().get();
 
-		if (permIds.length === 0) {
-			return;
+		if (permIds.length > 0) {
+			const rolePermList = permIds.map(permId => ({ permId, roleId: roleRow.roleId }));
+
+			await orm(c).insert(rolePerm).values(rolePermList).run();
 		}
 
-		const rolePermList = permIds.map(permId => ({ permId, roleId: roleRow.roleId }));
-
-		await orm(c).insert(rolePerm).values(rolePermList).run();
-
-
+		await this.sendRoleManagementWebhook(c, userId, 'ROLE_CREATED', roleRow, `Permissions: ${permIds.length}`);
 	},
 
 	async roleList(c) {
@@ -62,7 +61,7 @@ const roleService = {
 		return roleList;
 	},
 
-	async setRole(c, params) {
+	async setRole(c, params, actorUserId) {
 
 		let { name, permIds, roleId, banEmail, availDomain } = params;
 
@@ -71,6 +70,7 @@ const roleService = {
 		}
 
 		delete params.isDefault
+		const oldRole = await orm(c).select().from(role).where(eq(role.roleId, roleId)).get();
 
 		const notEmailIndex = banEmail.findIndex(item => (!verifyUtils.isEmail(item) && !verifyUtils.isDomain(item)) && item !== "*")
 
@@ -90,9 +90,11 @@ const roleService = {
 			await orm(c).insert(rolePerm).values(rolePermList).run();
 		}
 
+		const updatedRole = await orm(c).select().from(role).where(eq(role.roleId, roleId)).get();
+		await this.sendRoleManagementWebhook(c, actorUserId, 'ROLE_UPDATED', updatedRole || { roleId, name }, oldRole ? `Previous name: ${oldRole.name}` : '');
 	},
 
-	async delete(c, params) {
+	async delete(c, params, actorUserId) {
 
 		const { roleId } = params;
 
@@ -112,6 +114,7 @@ const roleService = {
 
 		await orm(c).delete(rolePerm).where(eq(rolePerm.roleId, roleId)).run();
 		await orm(c).delete(role).where(eq(role.roleId, roleId)).run();
+		await this.sendRoleManagementWebhook(c, actorUserId, 'ROLE_DELETED', roleRow);
 
 	},
 
@@ -123,13 +126,14 @@ const roleService = {
 		return await orm(c).select().from(role).where(eq(role.isDefault, roleConst.isDefault.OPEN)).get();
 	},
 
-	async setDefault(c, params) {
+	async setDefault(c, params, actorUserId) {
 		const roleRow = await orm(c).select().from(role).where(eq(role.roleId, params.roleId)).get();
 		if (!roleRow) {
 			throw new BizError(t('roleNotExist'));
 		}
 		await orm(c).update(role).set({ isDefault: 0 }).run();
 		await orm(c).update(role).set({ isDefault: 1 }).where(eq(role.roleId, params.roleId)).run();
+		await this.sendRoleManagementWebhook(c, actorUserId, 'ROLE_SET_DEFAULT', roleRow);
 	},
 
 	selectById(c, roleId) {
@@ -184,6 +188,24 @@ const roleService = {
 
 		return orm(c).select({ ...role, userId: user.userId }).from(user).leftJoin(role, eq(role.roleId, user.type)).where(inArray(user.userId, userIds)).all();
 
+	},
+
+
+	async sendRoleManagementWebhook(c, actorUserId, action, roleInfo, extra = '') {
+		if (!actorUserId) {
+			return;
+		}
+		try {
+			const actorRow = await userService.selectById(c, actorUserId);
+			if (!actorRow) {
+				return;
+			}
+			const roleRow = await userService.selectEffectiveRole(c, actorRow);
+			actorRow.role = roleRow;
+			await telegramService.sendRoleManageNotification(c, action, roleInfo, actorRow, extra);
+		} catch (e) {
+			console.error('Failed to send role management notification:', e);
+		}
 	},
 
 	isBanEmail(banEmail, fromEmail) {
