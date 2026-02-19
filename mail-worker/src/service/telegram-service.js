@@ -135,6 +135,37 @@ const telegramService = {
 		return emailTextTemplate(emailRow.text || '');
 	},
 
+	async getBanEmailContent(c, params) {
+		const { token } = params;
+		const result = await jwtUtils.verifyToken(c, token);
+		if (!result?.banLogId) return emailTextTemplate('Access denied or token invalid');
+		try {
+			const row = await c.env.db.prepare(`
+				SELECT id, sender_email as senderEmail, to_email as toEmail, matched_rule as matchedRule,
+					subject, text_preview as textPreview, html_content as htmlContent, create_time as createTime
+				FROM ban_email_log WHERE id = ?
+			`).bind(Number(result.banLogId)).first();
+			if (!row) return emailTextTemplate('Blocked email not found (may have been auto-deleted after 24h)');
+			const { r2Domain } = await settingService.query(c);
+			const header = `<!-- BLACKLISTED EMAIL PREVIEW -->\n<div style="background:#fee2e2;border:2px solid #ef4444;padding:12px 16px;font-family:sans-serif;margin-bottom:16px;border-radius:6px">
+<b>🚫 BLACKLISTED SENDER — Admin Preview Only</b><br>
+From: <code>${row.senderEmail}</code><br>
+To: <code>${row.toEmail}</code><br>
+Subject: <b>${row.subject || '(no subject)'}</b><br>
+Matched rule: <code>${row.matchedRule}</code><br>
+Blocked at: ${row.createTime} UTC<br>
+<small style="color:#991b1b">⚠️ This record auto-deletes 24h after block time.</small>
+</div>`;
+			if (row.htmlContent) {
+				return emailHtmlTemplate(header + row.htmlContent, r2Domain);
+			}
+			return emailTextTemplate(`${row.subject || '(no subject)'}\n\nFrom: ${row.senderEmail}\nTo: ${row.toEmail}\nMatched rule: ${row.matchedRule}\nBlocked at: ${row.createTime}\n\n---\n\n${row.textPreview || '(no text content)'}`);
+		} catch (e) {
+			console.error('getBanEmailContent error:', e);
+			return emailTextTemplate('Error loading preview: ' + e.message);
+		}
+	},
+
 	async getBotToken(c) {
 		const envToken = c.env.BOT_TOKEN || c.env.bot_token || c.env.TG_BOT_TOKEN || c.env.tgBotToken;
 		if (envToken) return envToken;
@@ -1104,17 +1135,40 @@ Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 			LIMIT 5
 		`).all();
 		const blacklistItems = blacklistRows?.results || [];
+
+		// Build preview URLs using banLogId stored in meta
+		const { customDomain } = await settingService.query(c);
+		const blacklistPreviewMap = new Map();
+		if (customDomain) {
+			for (const item of blacklistItems) {
+				let meta = {};
+				try { meta = JSON.parse(item.meta || '{}'); } catch (_) {}
+				if (meta.banLogId) {
+					const token = await jwtUtils.generateToken(c, { banLogId: meta.banLogId });
+					blacklistPreviewMap.set(item.logId, `${domainUtils.toOssDomain(customDomain)}/api/telegram/getBanEmail/${token}`);
+				}
+			}
+		}
+
 		const blacklistPreview = blacklistItems.length
 			? blacklistItems.map(item => {
 				let meta = {};
 				try { meta = JSON.parse(item.meta || '{}'); } catch (_) {}
-				return `• #${item.logId} From: <code>${meta.senderEmail || '-'}</code> → <code>${meta.to || '-'}</code>\n  Rule: ${meta.matchedRule || '-'} | At: ${item.createTime || '-'}`;
+				const hasPreview = blacklistPreviewMap.has(item.logId) ? ' 🔎' : '';
+				return `• #${item.logId}${hasPreview} From: <code>${meta.senderEmail || '-'}</code> → <code>${meta.to || '-'}</code>\n  Subj: ${meta.subject || '-'}\n  Rule: ${meta.matchedRule || '-'} | At: ${item.createTime || '-'}`;
 			}).join('\n')
 			: '-';
 		// ─────────────────────────────────────────────────────────────────────
 
 		const securityButtons = failedItems.map(item => ([{ text: `🧾 Security Event #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }]));
-		const blacklistButtons = blacklistItems.map(item => ([{ text: `🚫 Blocked #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }]));
+
+		// Each blocked email: detail button + preview button (if banLogId exists)
+		const blacklistButtons = blacklistItems.map(item => {
+			const row = [{ text: `🚫 Blocked #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }];
+			const previewUrl = blacklistPreviewMap.get(item.logId);
+			if (previewUrl) row.push({ text: '🔎 Preview Email', web_app: { url: previewUrl } });
+			return row;
+		});
 
 		const replyMarkup = {
 			inline_keyboard: [
