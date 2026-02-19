@@ -90,7 +90,8 @@ export default function emailMsgTemplate(email, tgMsgTo, tgMsgFrom, tgMsgText, s
 	}
 
 	template += `
-📝 Subject: <b>${email.subject}</b>`
+📝 Subject: <b>${email.subject}</b>
+🆔 Email ID: <code>${email.emailId}</code>`
 
 	const text = (emailUtils.formatText(email.text) || emailUtils.htmlToText(email.content))
 		.replace(/</g, '&lt;')
@@ -156,7 +157,8 @@ export function sendEmailMsgTemplate(emailInfo, userInfo) {
 
 📧 From: <code>${emailInfo.sendEmail}</code>${formatRoleInfo(userInfo.role)}
 📨 To: <code>${recipientList}</code>
-📝 Subject: <b>${emailInfo.subject}</b>`;
+📝 Subject: <b>${emailInfo.subject}</b>
+🆔 Email ID: <code>${emailInfo.emailId}</code>`;
 
 	if (text) {
 		template += `
@@ -242,6 +244,20 @@ export function deleteAddressMsgTemplate(addressEmail, userInfo, remainingAddres
 📍 IP Address: <code>${userInfo.activeIp}</code>${formatIpDetail(userInfo.ipDetail)}
 💻 Device: ${userInfo.device || 'Unknown'} / ${userInfo.os || 'Unknown'}
 ${formatDualTime(new Date().toISOString(), userInfo.timezone)}`;
+}
+
+// Template untuk webhook role management (create/update/delete/set default)
+export function roleManageMsgTemplate(action, roleInfo, actorInfo, extra = '') {
+	return `🛡️ <b>Role Management</b>
+
+🧩 Action: <b>${action}</b>
+🎭 Role: <b>${roleInfo?.name || 'Unknown'}</b>
+🆔 Role ID: <code>${roleInfo?.roleId ?? '-'}</code>${extra ? `
+📌 Details: ${extra}` : ''}
+👤 Actor: <code>${actorInfo.email}</code>${formatRoleInfo(actorInfo.role)}
+📍 IP Address: <code>${actorInfo.activeIp}</code>${formatIpDetail(actorInfo.ipDetail)}
+💻 Device: ${actorInfo.device || 'Unknown'} / ${actorInfo.os || 'Unknown'}
+${formatDualTime(new Date().toISOString(), actorInfo.timezone)}`;
 }
 
 // Template untuk notifikasi perubahan role

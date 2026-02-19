@@ -2,6 +2,7 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
   const targetUrl = event.notification?.data?.url || '/inbox';
+  const absoluteUrl = new URL(targetUrl, self.location.origin).href;
 
   event.waitUntil((async () => {
     const windowClients = await self.clients.matchAll({
@@ -9,20 +10,22 @@ self.addEventListener('notificationclick', (event) => {
       includeUncontrolled: true,
     });
 
-    for (const client of windowClients) {
-      if ('focus' in client) {
-        await client.focus();
-      }
+    if (windowClients.length > 0) {
+      for (const client of windowClients) {
+        client.postMessage({
+          type: 'OPEN_INBOX_FROM_NOTIFICATION',
+          url: targetUrl,
+        });
 
-      if ('navigate' in client) {
-        await client.navigate(targetUrl);
+        if ('focus' in client) {
+          await client.focus();
+        }
       }
-
       return;
     }
 
     if (self.clients.openWindow) {
-      await self.clients.openWindow(targetUrl);
+      await self.clients.openWindow(absoluteUrl);
     }
   })());
 });
