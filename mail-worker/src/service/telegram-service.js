@@ -37,6 +37,12 @@ import emailHtmlTemplate from '../template/email-html';
 import domainUtils from '../utils/domain-uitls';
 import analysisDao from '../dao/analysis-dao';
 
+const EVENT_LEVEL = {
+	INFO: 'info',
+	WARN: 'warn',
+	ERROR: 'error'
+};
+
 const telegramService = {
 
 	async getEmailContent(c, params) {
@@ -85,12 +91,28 @@ const telegramService = {
 					body: JSON.stringify(payload)
 				});
 				if (!res.ok) {
-					console.error(`Failed to send Telegram notification status: ${res.status} response: ${await res.text()}`);
+					const errorText = `Failed to send Telegram notification status: ${res.status} response: ${await res.text()}`;
+					console.error(errorText);
+					await this.logSystemEvent(c, 'telegram.send.error', EVENT_LEVEL.ERROR, errorText, { chatId: chatId.trim() });
 				}
 			} catch (e) {
 				console.error('Failed to send Telegram notification:', e.message);
+				await this.logSystemEvent(c, 'telegram.send.error', EVENT_LEVEL.ERROR, e.message, { chatId: chatId.trim() });
 			}
 		}));
+	},
+
+	async logSystemEvent(c, eventType, level, message, meta = null) {
+		try {
+			const safeMessage = String(message || '').slice(0, 512);
+			const metaJson = meta ? JSON.stringify(meta).slice(0, 2000) : null;
+			await c.env.db.prepare(`
+				INSERT INTO webhook_event_log (event_type, level, message, meta)
+				VALUES (?, ?, ?, ?)
+			`).bind(eventType, level, safeMessage, metaJson).run();
+		} catch (e) {
+			console.error('Failed to write webhook_event_log:', e.message);
+		}
 	},
 
 
@@ -141,6 +163,7 @@ const telegramService = {
 			}
 		} catch (e) {
 			console.error('Failed to read ip cache:', e.message);
+			await this.logSystemEvent(c, 'security.ip_cache.read_error', EVENT_LEVEL.ERROR, e.message, { ip });
 		}
 
 		const apiKey = c.env.vpnapi_key || c.env.VPNAPI_KEY;
@@ -154,18 +177,22 @@ const telegramService = {
 			}
 		} catch (e) {
 			console.error('Failed to read ip usage:', e.message);
+			await this.logSystemEvent(c, 'security.ip_usage.read_error', EVENT_LEVEL.ERROR, e.message, { ip });
 		}
 
 		let detail = { ip };
 		try {
 			const res = await fetch(`https://vpnapi.io/api/${encodeURIComponent(ip)}?key=${encodeURIComponent(apiKey)}`);
 			if (!res.ok) {
-				console.error(`Failed to query vpnapi.io status: ${res.status} response: ${await res.text()}`);
+				const errorText = `Failed to query vpnapi.io status: ${res.status} response: ${await res.text()}`;
+				console.error(errorText);
+				await this.logSystemEvent(c, 'security.vpnapi.error', EVENT_LEVEL.ERROR, errorText, { ip });
 				return detail;
 			}
 			detail = await res.json();
 		} catch (e) {
 			console.error('Failed to query vpnapi.io:', e.message);
+			await this.logSystemEvent(c, 'security.vpnapi.error', EVENT_LEVEL.ERROR, e.message, { ip });
 			return detail;
 		}
 
@@ -177,6 +204,7 @@ const telegramService = {
 			]);
 		} catch (e) {
 			console.error('Failed to write ip cache:', e.message);
+			await this.logSystemEvent(c, 'security.ip_cache.write_error', EVENT_LEVEL.ERROR, e.message, { ip });
 		}
 
 		return detail;
@@ -255,6 +283,7 @@ const telegramService = {
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		const message = sendEmailMsgTemplate(emailInfo, userInfo);
+		await this.logSystemEvent(c, 'email.sent', EVENT_LEVEL.INFO, 'Email sent notification emitted', { emailId: emailInfo?.emailId, userId: userInfo?.userId });
 		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
 	},
 
@@ -480,8 +509,10 @@ const telegramService = {
 			inline_keyboard: [
 				[{ text: '📊 Status', callback_data: 'cmd:status' }, { text: '🛡️ Role', callback_data: 'cmd:role' }],
 				[{ text: '📨 Mail', callback_data: 'cmd:mail:1' }, { text: '👥 Users', callback_data: 'cmd:users:1' }],
-				[{ text: '🎟️ Invite', callback_data: 'cmd:invite:1' }, { text: '🆔 Chat ID', callback_data: 'cmd:chatid' }],
-				[{ text: '🧭 System', callback_data: 'cmd:system' }, { text: '❓ Help', callback_data: 'cmd:help' }]
+				[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🌐 Whois', callback_data: 'cmd:whois:help' }],
+				[{ text: '📈 Stats', callback_data: 'cmd:stats:7d' }, { text: '🎟️ Invite', callback_data: 'cmd:invite:1' }],
+				[{ text: '🧭 System', callback_data: 'cmd:system' }, { text: '🗂 Events', callback_data: 'cmd:events:1' }],
+				[{ text: '🆔 Chat ID', callback_data: 'cmd:chatid' }, { text: '❓ Help', callback_data: 'cmd:help' }]
 			]
 		};
 	},
@@ -492,6 +523,132 @@ const telegramService = {
 		buttons.push({ text: `📄 ${page}`, callback_data: 'cmd:noop' });
 		if (hasNext) buttons.push({ text: 'Next ➡️', callback_data: `cmd:${command}:${page + 1}` });
 		return { inline_keyboard: [buttons, [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+	},
+
+	parseRangeDays(rangeArg = '7d') {
+		const value = String(rangeArg || '7d').trim().toLowerCase();
+		const match = /^(\d{1,2})d$/.exec(value);
+		if (!match) return 7;
+		return Math.max(1, Math.min(30, Number(match[1])));
+	},
+
+	async formatSecurityCommand(c) {
+		const { results } = await c.env.db.prepare(`
+			SELECT ip, update_time, data
+			FROM ip_security_cache
+			WHERE
+				COALESCE(json_extract(data, '$.security.vpn'), 0) = 1
+				OR COALESCE(json_extract(data, '$.security.proxy'), 0) = 1
+				OR COALESCE(json_extract(data, '$.security.tor'), 0) = 1
+				OR COALESCE(json_extract(data, '$.security.relay'), 0) = 1
+			ORDER BY update_time DESC
+			LIMIT 10
+		`).all();
+		if (!results?.length) {
+			return { text: `🔐 <b>/security</b>
+No risky IP found in cache.`, replyMarkup: this.buildMainMenu() };
+		}
+		const lines = results.map((row, idx) => {
+			let detail = {};
+			try { detail = JSON.parse(row.data || '{}'); } catch (_) {}
+			const sec = detail.security || {};
+			const location = detail.location || {};
+			return `${idx + 1}. <code>${row.ip || '-'}</code> | vpn=${sec.vpn ? 'Y' : 'N'} proxy=${sec.proxy ? 'Y' : 'N'} tor=${sec.tor ? 'Y' : 'N'} relay=${sec.relay ? 'Y' : 'N'}
+   Loc: ${location.country || '-'} / ${location.city || '-'} | Updated: ${row.update_time || '-'}`;
+		}).join('
+');
+		return { text: `🔐 <b>/security</b>
+
+${lines}`, replyMarkup: this.buildMainMenu() };
+	},
+
+	async formatWhoisCommand(c, ipArg) {
+		const ip = String(ipArg || '').trim();
+		if (!ip || ip === 'help') {
+			return {
+				text: `🌐 <b>/whois</b>
+Usage: <code>/whois 1.1.1.1</code>`,
+				replyMarkup: this.buildMainMenu()
+			};
+		}
+		const detail = await this.queryIpSecurity(c, ip);
+		const sec = detail?.security || {};
+		const loc = detail?.location || {};
+		const net = detail?.network || {};
+		return {
+			text: `🌐 <b>/whois</b>
+
+IP: <code>${ip}</code>
+VPN/Proxy/Tor/Relay: ${sec.vpn ? 'Y' : 'N'}/${sec.proxy ? 'Y' : 'N'}/${sec.tor ? 'Y' : 'N'}/${sec.relay ? 'Y' : 'N'}
+Location: ${loc.city || '-'}, ${loc.region || '-'}, ${loc.country || '-'} (${loc.country_code || '-'})
+ASN Org: ${net.autonomous_system_organization || '-'}
+ASN: ${net.autonomous_system_number || '-'}`,
+			replyMarkup: this.buildMainMenu()
+		};
+	},
+
+	async formatStatsCommand(c, rangeArg = '7d') {
+		const days = this.parseRangeDays(rangeArg);
+		const offset = `-${days - 1} day`;
+		const [regRows, receiveRows, sendRows] = await Promise.all([
+			c.env.db.prepare(`SELECT DATE(create_time) as day, COUNT(*) as total FROM user WHERE DATE(create_time) BETWEEN DATE('now', ?) AND DATE('now') GROUP BY DATE(create_time) ORDER BY day ASC`).bind(offset).all(),
+			c.env.db.prepare(`SELECT DATE(create_time) as day, COUNT(*) as total FROM email WHERE type = 0 AND DATE(create_time) BETWEEN DATE('now', ?) AND DATE('now') GROUP BY DATE(create_time) ORDER BY day ASC`).bind(offset).all(),
+			c.env.db.prepare(`SELECT DATE(create_time) as day, COUNT(*) as total FROM email WHERE type = 1 AND DATE(create_time) BETWEEN DATE('now', ?) AND DATE('now') GROUP BY DATE(create_time) ORDER BY day ASC`).bind(offset).all()
+		]);
+		const regMap = new Map((regRows.results || []).map(r => [r.day, Number(r.total)]));
+		const recvMap = new Map((receiveRows.results || []).map(r => [r.day, Number(r.total)]));
+		const sendMap = new Map((sendRows.results || []).map(r => [r.day, Number(r.total)]));
+		const lines = [];
+		let regTotal = 0;
+		let recvTotal = 0;
+		let sendTotal = 0;
+		for (let i = days - 1; i >= 0; i--) {
+			const day = dayjs.utc().subtract(i, 'day').format('YYYY-MM-DD');
+			const reg = regMap.get(day) || 0;
+			const recv = recvMap.get(day) || 0;
+			const send = sendMap.get(day) || 0;
+			regTotal += reg; recvTotal += recv; sendTotal += send;
+			lines.push(`${day}: U=${reg} | R=${recv} | S=${send}`);
+		}
+		return {
+			text: `📈 <b>/stats ${days}d</b>
+
+Total Reg: ${regTotal}
+Total Receive: ${recvTotal}
+Total Send: ${sendTotal}
+
+${lines.join('\n')}`,
+			replyMarkup: this.buildMainMenu()
+		};
+	},
+
+	async formatEventsCommand(c, page = 1) {
+		const pageSize = 5;
+		try {
+			const currentPage = Math.max(1, Number(page) || 1);
+			const rows = await c.env.db.prepare(`
+				SELECT log_id as logId, event_type as eventType, level, message, create_time as createTime
+				FROM webhook_event_log
+				ORDER BY log_id DESC
+				LIMIT ? OFFSET ?
+			`).bind(pageSize + 1, (currentPage - 1) * pageSize).all();
+			const items = rows.results || [];
+			if (!items.length) {
+				return { text: `🗂 <b>/events</b>
+No webhook event logs yet.`, replyMarkup: this.buildMainMenu() };
+			}
+			const hasNext = items.length > pageSize;
+			const visible = hasNext ? items.slice(0, pageSize) : items;
+			const body = visible.map(item => `#${item.logId} [${item.level}] ${item.eventType}
+${item.message}
+At: ${item.createTime}`).join('\n\n');
+			return { text: `🗂 <b>/events</b> (page ${currentPage})
+
+${body}`, replyMarkup: this.buildPager('events', currentPage, hasNext) };
+		} catch (e) {
+			return { text: `🗂 <b>/events</b>
+Unable to query event log: ${e.message}`, replyMarkup: this.buildMainMenu() };
+		}
 	},
 
 	async formatMailCommand(c, page = 1) {
@@ -629,17 +786,24 @@ Send Emails: ${numberCount.sendTotal}
 	},
 
 	async formatSystemCommand(c) {
-		const [cacheCount, staleCount, webhookInfo, recentIpLogs] = await Promise.all([
+		try {
+			const [cacheCount, staleCount, webhookInfo, recentSystemLogs] = await Promise.all([
 			c.env.db.prepare('SELECT COUNT(*) as total FROM ip_security_cache').first(),
 			c.env.db.prepare("SELECT COUNT(*) as total FROM ip_security_cache WHERE update_time <= datetime('now', '-2 day')").first(),
 			this.getWebhookInfo(c),
-			c.env.db.prepare('SELECT ip, update_time FROM ip_security_cache ORDER BY update_time DESC LIMIT 3').all()
+			c.env.db.prepare(`
+				SELECT level, event_type as eventType, message, create_time as createTime
+				FROM webhook_event_log
+				WHERE event_type LIKE 'email.%' OR level = 'error'
+				ORDER BY log_id DESC
+				LIMIT 3
+			`).all()
 		]);
 		const webhookUrl = webhookInfo?.result?.url || '-';
 		const pending = webhookInfo?.result?.pending_update_count ?? '-';
 		const lastError = webhookInfo?.result?.last_error_message || '-';
-		const logs = (recentIpLogs?.results || []).map((row, index) =>
-			`${index + 1}. [${row.update_time || '-'}] IP intel refreshed: <code>${row.ip || '-'}</code>`
+		const logs = (recentSystemLogs?.results || []).map((row, index) =>
+			`${index + 1}. [${row.createTime || '-'}] [${row.level || '-'}] ${row.eventType}: ${row.message}`
 		).join('\n');
 		return `🧭 <b>/system</b>
 
@@ -650,11 +814,15 @@ Webhook URL: <code>${webhookUrl}</code>
 Pending Updates: ${pending} (queued updates waiting delivery)
 Last Error: ${lastError}
 
-📜 Recent System Logs (3):
+📜 Recent Email/Error Logs (3):
 ${logs || 'No logs yet.'}`;
+		} catch (e) {
+			return `🧭 <b>/system</b>\nUnable to query system logs: ${e.message}`;
+		}
 	},
 
-	async resolveCommand(c, command, pageArg, chatId, userId) {
+	async resolveCommand(c, command, args, chatId, userId) {
+		const pageArg = Number(args?.[0] || 1);
 		switch (command) {
 			case '/start':
 			case '/help':
@@ -663,21 +831,23 @@ ${logs || 'No logs yet.'}`;
 
 Use buttons below or type commands manually:
 
-📊 <b>/status</b> — system counters, bot enable state, allowed chat IDs
-👥 <b>/users [page]</b> — users + active IP + VPNAPI risk summary
-📨 <b>/mail [page]</b> — latest received/sent mail list
-🛡️ <b>/role</b> — role quotas + send/add-address permission flags
-🎟️ <b>/invite [page]</b> — invitation code list
-🆔 <b>/chatid</b> — show your current chat_id/user_id
-🧭 <b>/system</b> — cache + webhook diagnostics
+📊 <b>/status</b> — system counters + bot state
+👥 <b>/users [page]</b> — users + send/receive + IP intelligence
+📨 <b>/mail [page]</b> — recent emails with pager
+🛡️ <b>/role</b> — role quota + authorization flags
+🔐 <b>/security</b> — suspicious IP snapshot from cache
+🌐 <b>/whois &lt;ip&gt;</b> — live/cache IP intelligence lookup
+📈 <b>/stats [range]</b> — timeline stats, e.g. <code>/stats 7d</code>
+🧭 <b>/system</b> — webhook health + recent email/error logs
+🗂 <b>/events [page]</b> — browse webhook/system event log
+🎟️ <b>/invite [page]</b> — invitation codes
+🆔 <b>/chatid</b> — your current chat_id/user_id
 
 <b>Examples:</b>
 • <code>/users 2</code>
-• <code>/mail 3</code>
-• <code>/invite 1</code>
-• <code>/system</code>
-
-Tap pager buttons to navigate page-by-page.`,
+• <code>/whois 1.1.1.1</code>
+• <code>/stats 3d</code>
+• <code>/events 1</code>`,
 					replyMarkup: this.buildMainMenu()
 				};
 			case '/mail':
@@ -694,8 +864,16 @@ Tap pager buttons to navigate page-by-page.`,
 				return { text: `🆔 chat_id: <code>${chatId}</code>\n👤 user_id: <code>${userId || '-'}</code>`, replyMarkup: this.buildMainMenu() };
 			case '/system':
 				return { text: await this.formatSystemCommand(c), replyMarkup: this.buildMainMenu() };
+			case '/security':
+				return await this.formatSecurityCommand(c);
+			case '/whois':
+				return await this.formatWhoisCommand(c, args?.[0]);
+			case '/stats':
+				return await this.formatStatsCommand(c, args?.[0] || '7d');
+			case '/events':
+				return await this.formatEventsCommand(c, pageArg);
 			default:
-				return await this.resolveCommand(c, '/help', pageArg, chatId, userId);
+				return await this.resolveCommand(c, '/help', [], chatId, userId);
 		}
 	},
 
@@ -708,29 +886,30 @@ Tap pager buttons to navigate page-by-page.`,
 			await this.answerCallbackQuery(c, callback.id);
 			if (!await this.isAllowedChat(c, chatId, userId)) return;
 			if (callback.data === 'cmd:noop') return;
+			if (callback.data === 'cmd:menu' || callback.data === 'cmd:help') {
+				const result = await this.resolveCommand(c, '/help', [], chatId, userId);
+				const edited = await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
+				if (!edited) await this.sendTelegramReply(c, chatId, result.text, result.replyMarkup);
+				return;
+			}
+
 			let command = '/help';
-			let pageArg = 1;
-			if (callback.data === 'cmd:menu') {
-				const result = await this.resolveCommand(c, '/help', 1, chatId, userId);
-				const edited = await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
-				if (!edited) await this.sendTelegramReply(c, chatId, result.text, result.replyMarkup);
-				return;
-			}
-			if (callback.data === 'cmd:help') {
-				const result = await this.resolveCommand(c, '/help', 1, chatId, userId);
-				const edited = await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
-				if (!edited) await this.sendTelegramReply(c, chatId, result.text, result.replyMarkup);
-				return;
-			}
-			const match = /^cmd:(mail|users|invite):(\d+)$/.exec(callback.data);
-			if (match) {
-				command = `/${match[1]}`;
-				pageArg = Number(match[2] || 1);
+			let args = [];
+			const pagingMatch = /^cmd:(mail|users|invite|events):(\d+)$/.exec(callback.data);
+			if (pagingMatch) {
+				command = `/${pagingMatch[1]}`;
+				args = [pagingMatch[2]];
+			} else if (callback.data === 'cmd:stats:7d') {
+				command = '/stats';
+				args = ['7d'];
+			} else if (callback.data === 'cmd:whois:help') {
+				command = '/whois';
+				args = ['help'];
 			} else {
-				const single = /^cmd:(status|role|chatid|system)$/.exec(callback.data);
+				const single = /^cmd:(status|role|chatid|system|security)$/.exec(callback.data);
 				if (single) command = `/${single[1]}`;
 			}
-			const result = await this.resolveCommand(c, command, pageArg, chatId, userId);
+			const result = await this.resolveCommand(c, command, args, chatId, userId);
 			const edited = await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
 			if (!edited) await this.sendTelegramReply(c, chatId, result.text, result.replyMarkup);
 			return;
@@ -750,22 +929,24 @@ Tap pager buttons to navigate page-by-page.`,
 				? '⛔ Unauthorized\nReason: CHAT_ID allowlist is empty.'
 				: `⛔ Unauthorized\nAllowed: ${allowed.join(', ')}\nCurrent chat_id: ${chatId}${userId ? `\nCurrent user_id: ${userId}` : ''}`;
 			await this.sendTelegramReply(c, chatId, msg);
+			await this.logSystemEvent(c, 'telegram.command.unauthorized', EVENT_LEVEL.WARN, 'Unauthorized command attempt', { chatId, userId, text });
 			return;
 		}
 
 		const args = text.split(/\s+/).filter(Boolean);
-		const rawCommand = args[0];
-		const pageArg = Number(args[1] || 1);
+		const rawCommand = args.shift();
 		const command = rawCommand.includes('@') ? rawCommand.split('@')[0] : rawCommand;
 		console.log(`Telegram bot command received chat_id=${chatId} user_id=${userId || '-'} command=${command}`);
+		await this.logSystemEvent(c, 'telegram.command.received', EVENT_LEVEL.INFO, command, { chatId, userId, args });
 
-		const result = await this.resolveCommand(c, command, pageArg, chatId, userId);
+		const result = await this.resolveCommand(c, command, args, chatId, userId);
 		let reply = result.text;
 		if (reply.length > 3800) {
 			reply = `${reply.slice(0, 3800)}\n\n...truncated`;
 		}
 		await this.sendTelegramReply(c, chatId, reply, result.replyMarkup);
 	},
+
 
 };
 
