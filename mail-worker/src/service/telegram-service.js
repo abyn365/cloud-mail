@@ -571,6 +571,13 @@ const telegramService = {
 	},
 
 
+	mapUserStatusLabel(status) {
+		if (Number(status) === 0) return '0 (Active)';
+		if (Number(status) === 1) return '1 (Banned)';
+		return `${status} (Unknown)`;
+	},
+
+
 	buildSearchMenu() {
 		return {
 			inline_keyboard: [
@@ -831,9 +838,13 @@ Unable to query event log: ${e.message}`, replyMarkup: this.buildMainMenu() };
 		const logId = Number(idArg || 0);
 		const fromSecurity = Boolean(options?.fromSecurity);
 		const backPage = Math.max(1, Number(options?.backPage || 1));
+		const customBackText = options?.backText;
+		const customBackCallbackData = options?.backCallbackData;
+		const finalBackText = customBackText || (fromSecurity ? '🔐 Security List' : '🗂 Events List');
+		const finalBackCallbackData = customBackCallbackData || (fromSecurity ? 'cmd:security' : `cmd:events:${backPage}`);
 		if (!logId) {
 			return { text: `🧾 <b>/event</b>
-Usage: <code>/event 123</code>`, replyMarkup: this.buildDetailMenu({ backText: '🗂 Events List', backCallbackData: 'cmd:events:1' }) };
+Usage: <code>/event 123</code>`, replyMarkup: this.buildDetailMenu({ backText: finalBackText, backCallbackData: finalBackCallbackData }) };
 		}
 		const row = await c.env.db.prepare(`
 			SELECT log_id as logId, event_type as eventType, level, message, meta, create_time as createTime
@@ -842,7 +853,7 @@ Usage: <code>/event 123</code>`, replyMarkup: this.buildDetailMenu({ backText: '
 		`).bind(logId).first();
 		if (!row) {
 			return { text: `🧾 <b>/event</b>
-Event #${logId} not found.`, replyMarkup: this.buildDetailMenu({ backText: fromSecurity ? '🔐 Security List' : '🗂 Events List', backCallbackData: fromSecurity ? 'cmd:security' : `cmd:events:${backPage}` }) };
+Event #${logId} not found.`, replyMarkup: this.buildDetailMenu({ backText: finalBackText, backCallbackData: finalBackCallbackData }) };
 		}
 		let meta = {};
 		try { meta = row.meta ? JSON.parse(row.meta) : {}; } catch (_) {}
@@ -856,8 +867,8 @@ Message: ${row.message}
 
 Meta: <code>${JSON.stringify(meta || {}, null, 2).slice(0, 1200)}</code>`;
 		const replyMarkup = this.buildDetailMenu({
-			backText: fromSecurity ? '🔐 Security List' : '🗂 Events List',
-			backCallbackData: fromSecurity ? 'cmd:security' : `cmd:events:${backPage}`,
+			backText: finalBackText,
+			backCallbackData: finalBackCallbackData,
 			previewUrl
 		});
 		return { text: detail, replyMarkup };
@@ -981,16 +992,47 @@ No user data.`, replyMarkup: this.buildMainMenu() };
 			const security = ipDetail?.security || {};
 			const location = ipDetail?.location || {};
 			bodyParts.push(`🆔 <code>${item.userId}</code> ${item.email}
-Role: ${map.get(item.type) || (item.type === 0 ? 'admin' : 'unknown')} | Status: ${item.status} | Deleted: ${item.isDel}
+Role: ${map.get(item.type) || (item.type === 0 ? 'admin' : 'unknown')} | Status: ${this.mapUserStatusLabel(item.status)} | Deleted: ${item.isDel}
 Send Count: ${item.sendCount || 0} | Receive Count: ${receiveCountMap.get(item.userId) || 0}
 Created: ${item.createTime || '-'}
 IP: <code>${item.activeIp || '-'}</code>
 VPNAPI: vpn=${security.vpn ? 'Y' : 'N'} proxy=${security.proxy ? 'Y' : 'N'} tor=${security.tor ? 'Y' : 'N'}
 Loc: ${location.country || '-'} / ${location.city || '-'}`);
 		}
+		const userButtons = visibleRows.map(item => ([{ text: `👤 Detail #${item.userId} ${item.email}`.slice(0, 64), callback_data: `cmd:userid:${item.userId}:${currentPage}` }]));
+		const pagerMarkup = this.buildPager('users', currentPage, hasNext);
+		const replyMarkup = { inline_keyboard: [...userButtons, ...(pagerMarkup?.inline_keyboard || [])] };
 		return { text: `👥 <b>/users</b> (page ${currentPage})
 
-${bodyParts.join('\n\n')}`, replyMarkup: this.buildPager('users', currentPage, hasNext) };
+${bodyParts.join('\n\n')}`, replyMarkup };
+	},
+
+	async formatUserDetailCommand(c, userIdArg, pageArg = 1, highlightAccount = null) {
+		const userId = Number(userIdArg || 0);
+		const backPage = Math.max(1, Number(pageArg || 1));
+		if (!userId) {
+			return { text: `👤 <b>/user</b>\nUsage: <code>/user 2</code>`, replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: 'cmd:users:1' }) };
+		}
+		const userRow = await orm(c).select().from(user).where(eq(user.userId, userId)).get();
+		if (!userRow) {
+			return { text: `👤 <b>/user</b>\nUser #${userId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: `cmd:users:${backPage}` }) };
+		}
+		const roleRows = await orm(c).select().from(role);
+		const roleMap = new Map(roleRows.map(r => [r.roleId, r.name]));
+		const relatedAccountsRows = await c.env.db.prepare(`
+			SELECT account_id as accountId, email
+			FROM account
+			WHERE is_del = 0 AND user_id = ?
+			ORDER BY account_id DESC
+			LIMIT 10
+		`).bind(userId).all();
+		const relatedAccounts = relatedAccountsRows?.results || [];
+		const accountText = relatedAccounts.length ? relatedAccounts.map(item => `• account_id ${item.accountId}: ${item.email}`).join('\n') : '-';
+		const recent = await this.queryRecentActivity(c, { userId: userRow.userId, address: userRow.email, accountId: highlightAccount || null, ip: userRow.activeIp }, 5);
+		const eventButtons = recent.map(item => ([{ text: `🧾 Event #${item.logId} ${item.eventType}`.slice(0, 64), callback_data: `cmd:userevent:${item.logId}:${userRow.userId}:${backPage}` }]));
+		const detail = `👤 <b>User Detail</b>\n\nUser: #${userRow.userId} ${userRow.email}\nRole: ${roleMap.get(userRow.type) || userRow.type}\nStatus: ${this.mapUserStatusLabel(userRow.status)}\nActive IP: <code>${userRow.activeIp || '-'}</code>\nAddress Match: ${highlightAccount ? `account_id ${highlightAccount}` : '-'}\n\n📬 <b>Accounts</b>\n${accountText}\n\n${this.formatActivityBlock(recent)}`;
+		const replyMarkup = { inline_keyboard: [...eventButtons, [{ text: '👥 Users List', callback_data: `cmd:users:${backPage}` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		return { text: detail, replyMarkup };
 	},
 
 	async formatRoleCommand(c) {
@@ -1203,9 +1245,7 @@ ${logs || 'No logs yet.'}`;
 			}
 			if (!matchedUser && matchedAccount?.userId) matchedUser = await orm(c).select().from(user).where(eq(user.userId, matchedAccount.userId)).get();
 			if (!matchedUser) return { text: `🔎 <b>/search user</b>\nData tidak ditemukan untuk: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
-			const recent = await this.queryRecentActivity(c, { userId: matchedUser.userId, address: matchedUser.email, accountId: matchedAccount?.accountId || null, ip: matchedUser.activeIp }, 5);
-			const detail = `🔎 <b>Search Result: User</b>\n\nUser: #${matchedUser.userId} ${matchedUser.email}\nStatus: ${matchedUser.status} | Role ID: ${matchedUser.type}\nActive IP: <code>${matchedUser.activeIp || '-'}</code>\nAddress Match: ${matchedAccount ? `${matchedAccount.email} (account_id ${matchedAccount.accountId})` : '-'}\n\n${this.formatActivityBlock(recent)}`;
-			return { text: detail, replyMarkup: this.buildSearchMenu() };
+			return await this.formatUserDetailCommand(c, matchedUser.userId, 1, matchedAccount?.accountId || null);
 		}
 		return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
 	},
@@ -1223,7 +1263,7 @@ ${logs || 'No logs yet.'}`;
 Use buttons below or type commands manually:
 
 📊 <b>/status</b> — system counters + bot state
-👥 <b>/users [page]</b> — users + send/receive + IP intelligence
+👥 <b>/users [page]</b> — users + send/receive + IP intelligence (status: 0=active, 1=banned)
 📨 <b>/mail [page|emailId]</b> — recent emails with pager or detail by email id
 🛡️ <b>/role</b> — role quota + authorization flags
 🔐 <b>/security</b> — suspicious IP snapshot + recent failed-login events
@@ -1232,6 +1272,7 @@ Use buttons below or type commands manually:
 🧭 <b>/system</b> — webhook health + recent email/error logs
 🗂 <b>/events [page]</b> — browse webhook/system event log
 🧾 <b>/event &lt;id&gt;</b> — open one event detail + preview link
+👤 <b>/user &lt;id&gt;</b> — user detail + recent activity events
 🎟️ <b>/invite [page]</b> — invitation codes
 🔎 <b>/searchs</b> — quick search menu
 🔎 <b>/search ...</b> — search user/email/invite/role/ip
@@ -1259,6 +1300,9 @@ Use buttons below or type commands manually:
 				}
 				return await this.formatMailCommand(c, pageArg);
 			case '/users':
+				if (args?.[0] === 'detail') {
+					return await this.formatUserDetailCommand(c, args?.[1], args?.[2]);
+				}
 				return await this.formatUsersCommand(c, pageArg);
 			case '/role':
 				return { text: await this.formatRoleCommand(c), replyMarkup: this.buildMainMenu() };
@@ -1294,7 +1338,12 @@ Use buttons below or type commands manually:
 				}
 				return await this.formatEventsCommand(c, pageArg);
 			case '/event':
+				if (args?.[0] === 'user') {
+					return await this.formatEventDetailCommand(c, args?.[1], { backText: '👤 User Detail', backCallbackData: `cmd:userid:${args?.[2] || 1}:${args?.[3] || 1}` });
+				}
 				return await this.formatEventDetailCommand(c, args?.[0], { backPage: args?.[1] });
+			case '/user':
+				return await this.formatUserDetailCommand(c, args?.[0], args?.[1]);
 			case '/searchs':
 				return await this.formatSearchsCommand(c);
 			case '/search':
@@ -1330,6 +1379,14 @@ Use buttons below or type commands manually:
 				} else {
 					args = [pagingMatch[2]];
 				}
+			} else if (/^cmd:userid:(\d+):(\d+)$/.test(callback.data)) {
+				const userDetailMatch = /^cmd:userid:(\d+):(\d+)$/.exec(callback.data);
+				command = '/users';
+				args = ['detail', userDetailMatch[1], userDetailMatch[2]];
+			} else if (/^cmd:userevent:(\d+):(\d+):(\d+)$/.test(callback.data)) {
+				const userEventMatch = /^cmd:userevent:(\d+):(\d+):(\d+)$/.exec(callback.data);
+				command = '/event';
+				args = ['user', userEventMatch[1], userEventMatch[2], userEventMatch[3]];
 			} else if (/^cmd:inviteid:(\d+):(\d+)$/.test(callback.data)) {
 				const inviteDetailMatch = /^cmd:inviteid:(\d+):(\d+)$/.exec(callback.data);
 				command = '/invite';
