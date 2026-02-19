@@ -8,6 +8,22 @@ app.get('/telegram/getEmail/:token', async (c) => {
 });
 
 
+
+app.get('/telegram/webhook/setup', async (c) => {
+	const result = await telegramService.setWebhook(c);
+	return c.json(result, result.ok ? 200 : 400);
+});
+
+app.get('/telegram/webhook/info', async (c) => {
+	const result = await telegramService.getWebhookInfo(c);
+	return c.json(result, result.ok ? 200 : 400);
+});
+
+app.get('/telegram/webhook/delete', async (c) => {
+	const result = await telegramService.deleteWebhook(c);
+	return c.json(result, result.ok ? 200 : 400);
+});
+
 app.post('/telegram/webhook', async (c) => {
 	const body = await c.req.json();
 	await telegramService.handleBotWebhook(c, body);
