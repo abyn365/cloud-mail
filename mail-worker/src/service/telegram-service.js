@@ -793,13 +793,21 @@ ${bodyParts.join('\n\n')}`, replyMarkup: this.buildPager('users', currentPage, h
 		if (rows.length === 0) return `🛡️ <b>/role</b>
 No role data.`;
 		const roleRows = await Promise.all(rows.map(async item => this.attachRolePermInfo(c, { ...item })));
-		const body = roleRows.map(item => `🆔 <code>${item.roleId}</code> ${item.name}
-Send: ${item.sendType || '-'} / ${item.sendCount ?? '-'}
-Address limit: ${item.accountCount ?? '-'}
+		const body = roleRows.map(item => {
+			const sendDisplay = !item.canSendEmail
+				? 'Unauthorized'
+				: ((item.sendCount || 0) === 0 ? 'Unlimited' : `${item.sendType || '-'} / ${item.sendCount ?? '-'}`);
+			const addressDisplay = !item.canAddAddress
+				? 'Unauthorized'
+				: ((item.accountCount || 0) === 0 ? 'Unlimited' : `${item.accountCount ?? '-'}`);
+			return `🆔 <code>${item.roleId}</code> ${item.name}
+Send: ${sendDisplay}
+Address limit: ${addressDisplay}
 Permission: send=${item.canSendEmail ? 'Yes' : 'No'} | add-address=${item.canAddAddress ? 'Yes' : 'No'}
 Default: ${item.isDefault ? 'Yes' : 'No'}
 Ban email: ${item.banEmail || '-'}
-Avail domain: ${item.availDomain || '-'}`).join('\n\n');
+Avail domain: ${item.availDomain || '-'}`;
+		}).join('\n\n');
 		return `🛡️ <b>/role</b>
 
 ${body}`;
