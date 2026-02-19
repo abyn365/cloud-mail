@@ -239,6 +239,7 @@ const telegramService = {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		const ipDetail = await this.queryIpSecurity(c, userInfo.activeIp);
+		await this.logSystemEvent(c, 'security.ip_changed', EVENT_LEVEL.WARN, `Recent IP updated for ${userInfo?.email || '-'}`, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false, relay: ipDetail?.security?.relay || false });
 		const message = ipSecurityMsgTemplate(userInfo, ipDetail);
 		await this.emitWebhookEvent(c, 'security.ip_changed', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false, relay: ipDetail?.security?.relay || false });
 	},
