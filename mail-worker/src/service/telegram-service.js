@@ -410,11 +410,8 @@ const telegramService = {
 	},
 
 	async sendPasswordResetNotification(c, userInfo) {
-		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
-		await this.setIpDetailContext(c, userInfo);
-		userInfo.role = await this.getEffectiveRoleDisplay(c, userInfo);
-		const message = passwordResetMsgTemplate(userInfo);
-		await this.emitWebhookEvent(c, 'auth.password.reset', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email });
+		// Uses sendPasswordChangeNotification with type 'reset' for full admin-aware alerting
+		return await this.sendPasswordChangeNotification(c, userInfo, 'reset');
 	},
 
 	async sendUserSelfDeleteNotification(c, userInfo) {
@@ -570,8 +567,8 @@ const telegramService = {
 				[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🌐 Whois', callback_data: 'cmd:whois:help' }],
 				[{ text: '📈 Stats', callback_data: 'cmd:stats:7d' }, { text: '🎟️ Invite', callback_data: 'cmd:invite:1' }],
 				[{ text: '🧭 System', callback_data: 'cmd:system' }, { text: '🗂 Events', callback_data: 'cmd:events:1' }],
-				[{ text: '🔎 Search', callback_data: 'cmd:search' }, { text: '🆔 Chat ID', callback_data: 'cmd:chatid' }],
-				[{ text: '❓ Help', callback_data: 'cmd:help' }]
+				[{ text: '📬 Recent', callback_data: 'cmd:recent' }, { text: '🔎 Search', callback_data: 'cmd:search' }],
+				[{ text: '🆔 Chat ID', callback_data: 'cmd:chatid' }, { text: '❓ Help', callback_data: 'cmd:help' }]
 			]
 		};
 	},
@@ -818,7 +815,7 @@ ${ipLine}
 
 ${this.formatActivityBlock(recent)}`;
 
-		const replyMarkup = { inline_keyboard: [...eventButtons, [{ text: '👥 Users List', callback_data: `cmd:users:${backPage}` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		const replyMarkup = { inline_keyboard: [...eventButtons, [{ text: '📧 View Emails', callback_data: `cmd:usermail:${userRow.userId}:1` }, { text: '🚫 Ban/Unban', callback_data: `cmd:banuser:${userRow.userId}` }], [{ text: '👥 Users List', callback_data: `cmd:users:${backPage}` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
 		return { text: detail, replyMarkup };
 	},
 
@@ -901,7 +898,10 @@ ${isAdmin ? '👑' : '🛡️'} Role: ${roleDisplay} | Status: ${this.mapUserSta
 🗓️ Created: ${item.createTime || '-'}`);
 		}
 
-		const userButtons = visibleRows.map(item => ([{ text: `👤 #${item.userId} ${item.email}`.slice(0, 64), callback_data: `cmd:userid:${item.userId}:${currentPage}` }]));
+		const userButtons = visibleRows.map(item => ([
+			{ text: `👤 #${item.userId} ${item.email}`.slice(0, 40), callback_data: `cmd:userid:${item.userId}:${currentPage}` },
+			{ text: '📧', callback_data: `cmd:usermail:${item.userId}:1` }
+		]));
 		const pagerMarkup = this.buildPager('users', currentPage, hasNext);
 		const replyMarkup = { inline_keyboard: [...userButtons, ...(pagerMarkup?.inline_keyboard || [])] };
 		return { text: `👥 <b>/users</b> (page ${currentPage})\n\n${bodyParts.join('\n\n')}`, replyMarkup };
@@ -1015,9 +1015,13 @@ Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 		}).join('\n');
 
 		const securityButtons = failedItems.map(item => ([{ text: `🧾 Security Event #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }]));
-		const replyMarkup = securityButtons.length > 0
-			? { inline_keyboard: [...securityButtons, [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-			: this.buildMainMenu();
+		const replyMarkup = {
+			inline_keyboard: [
+				...securityButtons,
+				[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }],
+				[{ text: '🏠 Menu', callback_data: 'cmd:menu' }]
+			]
+		};
 
 		return { text: `🔐 <b>/security</b>
 
@@ -1093,6 +1097,10 @@ ${userLines || '-'}`,
 	// ─── STATS COMMAND ────────────────────────────────────────────────────────
 
 	async formatStatsCommand(c, rangeArg = '7d') {
+		const sub = String(rangeArg || '').toLowerCase();
+		if (sub === 'top') return await this.formatStatsTopCommand(c);
+		if (sub === 'bounce') return await this.formatStatsBounceCommand(c);
+
 		const days = this.parseRangeDays(rangeArg);
 		const offset = `-${days - 1} day`;
 		const [regRows, receiveRows, sendRows] = await Promise.all([
@@ -1126,7 +1134,7 @@ ${userLines || '-'}`,
 
 <b>Daily (U=users R=receive S=send)</b>
 ${lines.join('\n')}`,
-			replyMarkup: this.buildMainMenu()
+			replyMarkup: { inline_keyboard: [[{ text: '🏆 Top Users', callback_data: 'cmd:stats:top' }, { text: '📉 Bounce/Fail', callback_data: 'cmd:stats:bounce' }], [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
 		};
 	},
 
@@ -1462,6 +1470,232 @@ ${historyText}`;
 		return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
 	},
 
+	// ─── NEW COMMAND: RECENT EMAILS ──────────────────────────────────────────
+
+	async formatRecentCommand(c) {
+		const rows = await c.env.db.prepare(`
+			SELECT e.email_id as emailId, e.send_email as sendEmail, e.to_email as toEmail,
+				e.subject, e.type, e.is_del as isDel, e.create_time as createTime,
+				e.user_id as userId, u.email as userEmail
+			FROM email e
+			LEFT JOIN user u ON u.user_id = e.user_id
+			ORDER BY e.email_id DESC
+			LIMIT 10
+		`).all();
+		const items = rows?.results || [];
+		if (!items.length) return { text: `📬 <b>/recent</b>\nNo emails yet.`, replyMarkup: this.buildMainMenu() };
+
+		const body = items.map(item => {
+			const typeIcon = item.type === 0 ? '📥' : '📤';
+			const subj = (item.subject || '(no subject)').slice(0, 50);
+			const ownerTag = item.userEmail ? ` | 👤 #${item.userId}` : '';
+			return `${typeIcon} <code>#${item.emailId}</code>${ownerTag}\nFrom: ${item.sendEmail || '-'} → To: ${item.toEmail || '-'}\nSubj: ${subj}\nAt: ${item.createTime}`;
+		}).join('\n\n');
+
+		const mailButtons = items.map(item => [{ text: `✉️ #${item.emailId} ${(item.subject || '(no subject)').slice(0, 45)}`, callback_data: `cmd:mailid:${item.emailId}:1` }]);
+		const replyMarkup = { inline_keyboard: [...mailButtons, [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		return { text: `📬 <b>/recent</b> — Last 10 emails\n\n${body}`, replyMarkup };
+	},
+
+	// ─── NEW COMMAND: RESET QUOTA ─────────────────────────────────────────────
+
+	async formatResetQuotaCommand(c, userIdArg) {
+		const userId = Number(userIdArg || 0);
+		if (!userId) return { text: `🔄 Usage: <code>/resetquota &lt;userId&gt;</code>`, replyMarkup: this.buildMainMenu() };
+
+		const userRow = await c.env.db.prepare('SELECT user_id as userId, email, send_count as sendCount FROM user WHERE user_id = ?').bind(userId).first();
+		if (!userRow) return { text: `🔄 User #${userId} not found.`, replyMarkup: this.buildMainMenu() };
+
+		const oldCount = userRow.sendCount || 0;
+		await c.env.db.prepare('UPDATE user SET send_count = 0 WHERE user_id = ?').bind(userId).run();
+		await this.logSystemEvent(c, 'admin.quota.reset', EVENT_LEVEL.INFO, `Quota reset for user #${userId} ${userRow.email} (was ${oldCount})`, { userId, email: userRow.email, oldCount });
+
+		return { text: `✅ <b>Quota Reset</b>\n\nUser: #${userId} <code>${userRow.email}</code>\nPrevious send_count: ${oldCount} → 0`, replyMarkup: { inline_keyboard: [[{ text: '👤 View User', callback_data: `cmd:userid:${userId}:1` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] } };
+	},
+
+	// ─── NEW COMMAND: USER MAIL LIST ─────────────────────────────────────────
+
+	async formatUserMailCommand(c, userIdArg, pageArg = 1) {
+		const userId = Number(userIdArg || 0);
+		const currentPage = Math.max(1, Number(pageArg) || 1);
+		const pageSize = 8;
+		if (!userId) return { text: `📧 Usage: <code>/usermail &lt;userId&gt;</code>`, replyMarkup: this.buildMainMenu() };
+
+		const userRow = await c.env.db.prepare('SELECT user_id as userId, email FROM user WHERE user_id = ?').bind(userId).first();
+		if (!userRow) return { text: `📧 User #${userId} not found.`, replyMarkup: this.buildMainMenu() };
+
+		const rows = await c.env.db.prepare(`
+			SELECT email_id as emailId, send_email as sendEmail, to_email as toEmail,
+				subject, type, is_del as isDel, create_time as createTime
+			FROM email
+			WHERE user_id = ?
+			ORDER BY email_id DESC
+			LIMIT ? OFFSET ?
+		`).bind(userId, pageSize + 1, (currentPage - 1) * pageSize).all();
+
+		const items = rows?.results || [];
+		if (!items.length && currentPage === 1) return {
+			text: `📧 <b>Emails of #${userId} ${userRow.email}</b>\n\nNo emails found.`,
+			replyMarkup: { inline_keyboard: [[{ text: '👤 Back to User', callback_data: `cmd:userid:${userId}:1` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+		};
+
+		const hasNext = items.length > pageSize;
+		const visible = hasNext ? items.slice(0, pageSize) : items;
+		const body = visible.map(item => {
+			const typeIcon = item.type === 0 ? '📥' : '📤';
+			return `${typeIcon} <code>#${item.emailId}</code> ${(item.subject || '(no subject)').slice(0, 45)}\n  ${item.sendEmail || '-'} → ${item.toEmail || '-'} | ${item.createTime}`;
+		}).join('\n');
+
+		const mailButtons = visible.map(item => [{ text: `✉️ #${item.emailId} ${(item.subject || '(no subject)').slice(0, 45)}`, callback_data: `cmd:mailid:${item.emailId}:${currentPage}` }]);
+
+		const navButtons = [];
+		if (currentPage > 1) navButtons.push({ text: '⬅️ Prev', callback_data: `cmd:usermail:${userId}:${currentPage - 1}` });
+		if (hasNext) navButtons.push({ text: 'Next ➡️', callback_data: `cmd:usermail:${userId}:${currentPage + 1}` });
+
+		const replyMarkup = { inline_keyboard: [...mailButtons, navButtons.length ? navButtons : [], [{ text: '👤 Back to User', callback_data: `cmd:userid:${userId}:1` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]].filter(r => r.length) };
+		return { text: `📧 <b>Emails of #${userId} ${userRow.email}</b> (page ${currentPage})\n\n${body}`, replyMarkup };
+	},
+
+	// ─── NEW COMMAND: STATS TOP ───────────────────────────────────────────────
+
+	async formatStatsTopCommand(c) {
+		const [topSenders, topReceivers, topActive] = await Promise.all([
+			c.env.db.prepare(`
+				SELECT u.user_id as userId, u.email, COUNT(*) as cnt
+				FROM email e
+				JOIN user u ON u.user_id = e.user_id
+				WHERE e.type = 1 AND e.is_del = 0
+				GROUP BY e.user_id ORDER BY cnt DESC LIMIT 5
+			`).all(),
+			c.env.db.prepare(`
+				SELECT u.user_id as userId, u.email, COUNT(*) as cnt
+				FROM email e
+				JOIN user u ON u.user_id = e.user_id
+				WHERE e.type = 0 AND e.is_del = 0
+				GROUP BY e.user_id ORDER BY cnt DESC LIMIT 5
+			`).all(),
+			c.env.db.prepare(`
+				SELECT u.user_id as userId, u.email, COUNT(*) as cnt
+				FROM webhook_event_log w
+				JOIN user u ON CAST(json_extract(w.meta, '$.userId') AS INTEGER) = u.user_id
+				WHERE w.create_time >= datetime('now', '-7 day')
+				GROUP BY u.user_id ORDER BY cnt DESC LIMIT 5
+			`).all()
+		]);
+
+		const fmt = (rows) => (rows?.results || []).map((r, i) => `${i + 1}. #${r.userId} ${r.email} — ${r.cnt}`).join('\n') || '-';
+		return {
+			text: `📈 <b>/stats top</b>\n\n<b>📤 Top Senders (all time)</b>\n${fmt(topSenders)}\n\n<b>📥 Top Receivers (all time)</b>\n${fmt(topReceivers)}\n\n<b>🔥 Most Active (last 7d events)</b>\n${fmt(topActive)}`,
+			replyMarkup: { inline_keyboard: [[{ text: '📈 Back to Stats', callback_data: 'cmd:stats:7d' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+		};
+	},
+
+	// ─── NEW COMMAND: STATS BOUNCE ────────────────────────────────────────────
+
+	async formatStatsBounceCommand(c) {
+		const rows = await c.env.db.prepare(`
+			SELECT e.email_id as emailId, e.send_email as sendEmail, e.to_email as toEmail,
+				e.subject, e.status, e.create_time as createTime, u.email as userEmail, e.user_id as userId
+			FROM email e
+			LEFT JOIN user u ON u.user_id = e.user_id
+			WHERE e.status IN (4, 5, 6, 7, 8)
+			ORDER BY e.email_id DESC
+			LIMIT 15
+		`).all();
+
+		const statusLabel = { 4: '🔴 Bounced', 5: '❌ Failed', 6: '⚠️ Complained', 7: '⏳ Delayed', 8: '📭 No recipient' };
+		const items = rows?.results || [];
+		if (!items.length) return {
+			text: `📉 <b>/stats bounce</b>\n\n✅ No bounced/failed emails found.`,
+			replyMarkup: { inline_keyboard: [[{ text: '📈 Back to Stats', callback_data: 'cmd:stats:7d' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+		};
+
+		// Count by status
+		const countByStatus = {};
+		items.forEach(item => { countByStatus[item.status] = (countByStatus[item.status] || 0) + 1; });
+		const summary = Object.entries(countByStatus).map(([s, n]) => `${statusLabel[s] || `Status ${s}`}: ${n}`).join(' | ');
+
+		const body = items.map(item => {
+			const lbl = statusLabel[item.status] || `Status ${item.status}`;
+			return `${lbl} <code>#${item.emailId}</code>\n  From: ${item.sendEmail || '-'} → ${item.toEmail || '-'}\n  Subj: ${(item.subject || '-').slice(0, 50)}\n  User: #${item.userId} | At: ${item.createTime}`;
+		}).join('\n\n');
+
+		const mailButtons = items.slice(0, 8).map(item => [{ text: `✉️ #${item.emailId} ${statusLabel[item.status] || ''} ${(item.subject || '(no subject)').slice(0, 35)}`, callback_data: `cmd:mailid:${item.emailId}:1` }]);
+		const replyMarkup = { inline_keyboard: [...mailButtons, [{ text: '📈 Back to Stats', callback_data: 'cmd:stats:7d' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		return { text: `📉 <b>/stats bounce</b> — Recent failures\n${summary}\n\n${body}`, replyMarkup };
+	},
+
+	// ─── SECURITY: BLACKLIST MANAGEMENT ──────────────────────────────────────
+	// Integrated into /security as /security blacklist [add|remove] [email]
+
+	async formatSecurityBlacklistCommand(c, subArg, targetArg) {
+		const sub = String(subArg || 'list').toLowerCase();
+		const target = String(targetArg || '').trim();
+
+		if (sub === 'add' || sub === 'remove') {
+			if (!target) return { text: `🚫 Usage: <code>/security blacklist ${sub} email@example.com</code>`, replyMarkup: this.buildMainMenu() };
+			if (sub === 'add') {
+				// Check if already blacklisted
+				const existing = await c.env.db.prepare('SELECT id FROM ban_email WHERE email = ?').bind(target).first();
+				if (existing) return { text: `🚫 <code>${target}</code> is already blacklisted.`, replyMarkup: this.buildMainMenu() };
+				await c.env.db.prepare('INSERT INTO ban_email (email, create_time) VALUES (?, datetime(\'now\'))').bind(target).run();
+				await this.logSystemEvent(c, 'admin.blacklist.add', EVENT_LEVEL.WARN, `Blacklisted: ${target}`, { email: target });
+				return { text: `✅ <b>Blacklisted</b> <code>${target}</code>`, replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] } };
+			} else {
+				const res = await c.env.db.prepare('DELETE FROM ban_email WHERE email = ?').bind(target).run();
+				if (!res.meta?.changes) return { text: `⚠️ <code>${target}</code> not found in blacklist.`, replyMarkup: this.buildMainMenu() };
+				await this.logSystemEvent(c, 'admin.blacklist.remove', EVENT_LEVEL.INFO, `Removed from blacklist: ${target}`, { email: target });
+				return { text: `✅ <b>Removed from blacklist</b>: <code>${target}</code>`, replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] } };
+			}
+		}
+
+		// List view
+		const rows = await c.env.db.prepare('SELECT id, email, create_time as createTime FROM ban_email ORDER BY id DESC LIMIT 20').all();
+		const items = rows?.results || [];
+		const body = items.length
+			? items.map(r => `🚫 <code>${r.email}</code> — added ${r.createTime || '-'}`).join('\n')
+			: '✅ Blacklist is empty.';
+
+		return {
+			text: `🚫 <b>Email Blacklist</b>\n\n${body}\n\n<b>Commands:</b>\n• <code>/security blacklist add email@ex.com</code>\n• <code>/security blacklist remove email@ex.com</code>`,
+			replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+		};
+	},
+
+	// ─── NEW NOTIFICATION: PASSWORD CHANGE ALERT ──────────────────────────────
+
+	async sendPasswordChangeNotification(c, userInfo, changeType = 'change') {
+		// changeType: 'change' (user changed own password) | 'reset' (forgot password flow)
+		const isAdmin = this.isAdminUser(c, userInfo.email);
+		const roleRow = await this.getRoleById(c, userInfo.type);
+		const isSiteAdmin = roleRow?.roleId === 2;
+		const isPrivileged = isAdmin || isSiteAdmin;
+
+		const typeLabel = changeType === 'reset' ? 'Password Reset' : 'Password Changed';
+		const ipInfo = userInfo.activeIp ? ` from IP <code>${userInfo.activeIp}</code>` : '';
+		const roleLabel = isAdmin ? 'Admin (env)' : (roleRow?.name || `role ${userInfo.type}`);
+
+		const eventType = changeType === 'reset' ? 'auth.password.reset' : 'auth.password.change';
+		const level = isPrivileged ? EVENT_LEVEL.WARN : EVENT_LEVEL.INFO;
+		const message = `🔑 <b>${typeLabel}</b>
+User: ${userInfo.email} (#${userInfo.userId || '-'})
+Role: ${roleLabel}${ipInfo}
+At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
+
+		await this.logSystemEvent(c, eventType, level, message, { userId: userInfo.userId, email: userInfo.email, changeType });
+
+		if (isPrivileged) {
+			// Loud alert for admin/site-admin password changes — push immediately like failed login
+			await this.sendSecurityEventAlert(c,
+				`⚠️ ${typeLabel}: <b>${userInfo.email}</b>`,
+				`Role: ${roleLabel}${ipInfo}`
+			);
+		} else {
+			// Normal push for regular users
+			await this.sendTelegramMessage(c, message);
+		}
+	},
+
 	// ─── MAIN RESOLVER ────────────────────────────────────────────────────────
 
 	async resolveCommand(c, command, args, chatId, userId) {
@@ -1475,14 +1709,17 @@ ${historyText}`;
 📊 <b>/status</b> — system counters + bot state
 👥 <b>/users [page]</b> — users with quota info
 📨 <b>/mail [page|emailId]</b> — emails with pager or detail
+📬 <b>/recent</b> — last 10 emails across all users
 🛡️ <b>/role</b> — role quota + authorization flags
-🔐 <b>/security</b> — suspicious IP + failed-login events
+🔐 <b>/security</b> — risky IPs, failed logins, blacklist
 🌐 <b>/whois &lt;ip&gt;</b> — IP intelligence lookup
-📈 <b>/stats [range]</b> — e.g. <code>/stats 7d</code>
+📈 <b>/stats [range|top|bounce]</b> — e.g. <code>/stats 7d</code>
 🧭 <b>/system</b> — webhook health + logs
 🗂 <b>/events [page]</b> — webhook/system event log
 🧾 <b>/event &lt;id&gt;</b> — event detail + preview
 👤 <b>/user &lt;id&gt;</b> — user detail with role, quota, progress bars
+📧 <b>/usermail &lt;userId&gt; [page]</b> — list a user's emails
+🔄 <b>/resetquota &lt;userId&gt;</b> — reset user send quota to 0
 🎟️ <b>/invite [page]</b> — invite codes with usage history
 🔎 <b>/search [type] [query]</b> — search user/email/invite/role/ip
 🚫 <b>/ban &lt;userId&gt;</b> — ban a user
@@ -1490,15 +1727,21 @@ ${historyText}`;
 🆔 <b>/chatid</b> — your chat_id/user_id
 
 <b>Examples:</b>
-• <code>/user 1</code> — view admin user correctly
+• <code>/user 1</code>
+• <code>/usermail 5 2</code>
+• <code>/resetquota 5</code>
+• <code>/stats top</code>  <code>/stats bounce</code>  <code>/stats 14d</code>
+• <code>/security blacklist add spammer@evil.com</code>
 • <code>/search user abyn@abyn.xyz</code>
-• <code>/search email 42</code>
-• <code>/search ip 1.1.1.1</code>
-• <code>/whois 1.1.1.1</code>
-• <code>/stats 14d</code>
 • <code>/ban 5</code>`,
 					replyMarkup: this.buildMainMenu()
 				};
+			case '/recent':
+				return await this.formatRecentCommand(c);
+			case '/resetquota':
+				return await this.formatResetQuotaCommand(c, args?.[0]);
+			case '/usermail':
+				return await this.formatUserMailCommand(c, args?.[0], args?.[1] || 1);
 			case '/mail':
 				if (args?.[0] === 'page') return await this.formatMailCommand(c, Number(args?.[1] || 1));
 				if (/^\d+$/.test(String(args?.[0] || '')) && Number(args[0]) > 0 && Number(args[0]) <= 50) return await this.formatMailCommand(c, Number(args[0]));
@@ -1523,6 +1766,7 @@ ${historyText}`;
 				return { text: await this.formatSystemCommand(c), replyMarkup: this.buildMainMenu() };
 			case '/security':
 				if (args?.[0] === 'event') return await this.formatSecurityEventDetailCommand(c, args?.[1]);
+				if (args?.[0] === 'blacklist') return await this.formatSecurityBlacklistCommand(c, args?.[1], args?.[2]);
 				return await this.formatSecurityCommand(c);
 			case '/whois':
 				return await this.formatWhoisCommand(c, args?.[0]);
@@ -1593,6 +1837,25 @@ ${historyText}`;
 					command = '/search'; args = [m[1]]; // show subtype help, no query → help screen
 				} else if (callback.data === 'cmd:search') {
 					command = '/search'; // bare search → show menu
+				} else if (/^cmd:usermail:(\d+):(\d+)$/.test(callback.data)) {
+					const m = /^cmd:usermail:(\d+):(\d+)$/.exec(callback.data);
+					command = '/usermail'; args = [m[1], m[2]];
+				} else if (/^cmd:usermail:(\d+)$/.test(callback.data)) {
+					const m = /^cmd:usermail:(\d+)$/.exec(callback.data);
+					command = '/usermail'; args = [m[1], '1'];
+				} else if (/^cmd:banuser:(\d+)$/.test(callback.data)) {
+					// Shows ban/unban toggle UI — check current status then act
+					const m = /^cmd:banuser:(\d+)$/.exec(callback.data);
+					const uid = Number(m[1]);
+					const uRow = await c.env.db.prepare('SELECT status FROM user WHERE user_id = ?').bind(uid).first();
+					const isBanned = uRow?.status === 1;
+					command = isBanned ? '/unban' : '/ban'; args = [String(uid)];
+				} else if (callback.data === 'cmd:blacklist') {
+					command = '/security'; args = ['blacklist'];
+				} else if (callback.data === 'cmd:stats:top') {
+					command = '/stats'; args = ['top'];
+				} else if (callback.data === 'cmd:stats:bounce') {
+					command = '/stats'; args = ['bounce'];
 				} else if (/^cmd:mailid:(\d+):(\d+)$/.test(callback.data)) {
 					const m = /^cmd:mailid:(\d+):(\d+)$/.exec(callback.data);
 					command = '/mail'; args = [m[1], m[2]];
@@ -1613,7 +1876,7 @@ ${historyText}`;
 				} else if (callback.data === 'cmd:whois:help') {
 					command = '/whois'; args = ['help'];
 				} else {
-					const single = /^cmd:(status|role|chatid|system|security)$/.exec(callback.data);
+					const single = /^cmd:(status|role|chatid|system|security|recent)$/.exec(callback.data);
 					if (single) command = `/${single[1]}`;
 				}
 			}
