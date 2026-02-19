@@ -381,9 +381,7 @@ No email data.`;
 From: <code>${item.sendEmail || '-'}</code>
 To: <code>${item.toEmail || '-'}</code>
 Subj: ${item.subject || '-'}
-At: ${item.createTime}`).join('
-
-');
+At: ${item.createTime}`).join('\n\n');
 		return `📨 <b>/mail</b> (last 20)
 
 ${body}`;
@@ -405,9 +403,7 @@ No user data.`;
 		const map = new Map(roleRows.map(r => [r.roleId, r.name]));
 		const body = rows.map(item => `🆔 <code>${item.userId}</code> ${item.email}
 Role: ${map.get(item.type) || (item.type === 0 ? 'admin' : 'unknown')} | Status: ${item.status} | Deleted: ${item.isDel}
-Send Count: ${item.sendCount || 0} | Created: ${item.createTime || '-'}`).join('
-
-');
+Send Count: ${item.sendCount || 0} | Created: ${item.createTime || '-'}`).join('\n\n');
 		return `👥 <b>/users</b> (first 20)
 
 ${body}`;
@@ -422,9 +418,7 @@ Send: ${item.sendType || '-'} / ${item.sendCount ?? 'Unlimited'}
 Address limit: ${item.accountCount ?? 'Unlimited'}
 Default: ${item.isDefault ? 'Yes' : 'No'}
 Ban email: ${item.banEmail || '-'}
-Avail domain: ${item.availDomain || '-'}`).join('
-
-');
+Avail domain: ${item.availDomain || '-'}`).join('\n\n');
 		return `🛡️ <b>/role</b>
 
 ${body}`;
@@ -446,9 +440,7 @@ No invite code data.`;
 		const body = rows.map(item => `🆔 <code>${item.regKeyId}</code> <code>${item.code}</code>
 Role: ${map.get(item.roleId) || item.roleId}
 Remaining: ${item.count} | Expire: ${item.expireTime || '-'}
-Created: ${item.createTime || '-'}`).join('
-
-');
+Created: ${item.createTime || '-'}`).join('\n\n');
 		return `🎟️ <b>/invite</b>
 
 ${body}`;
