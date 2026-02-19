@@ -53,8 +53,9 @@ const telegramService = {
 	},
 
 	async getBotToken(c) {
-		if (c.env.tgBotToken || c.env.TG_BOT_TOKEN) {
-			return c.env.tgBotToken || c.env.TG_BOT_TOKEN;
+		const envToken = c.env.BOT_TOKEN || c.env.bot_token || c.env.TG_BOT_TOKEN || c.env.tgBotToken;
+		if (envToken) {
+			return envToken;
 		}
 		try {
 			const setting = await settingService.query(c);
@@ -348,7 +349,7 @@ const telegramService = {
 	},
 
 	parseAllowedChatIds(c) {
-		const raw = c.env.CHAT_ID || '';
+		const raw = c.env.CHAT_ID || c.env.TG_CHAT_ID || c.env.tgChatId || '';
 		return String(raw)
 			.split(',')
 			.map(item => item.trim())
@@ -487,12 +488,17 @@ Send Emails: ${numberCount.sendEmailCount}
 		}
 
 		if (!this.isAllowedChat(c, chatId)) {
-			await this.sendTelegramReply(c, chatId, '⛔ Unauthorized');
+			const allowed = this.parseAllowedChatIds(c);
+			const msg = allowed.length === 0
+				? '⛔ Unauthorized\nReason: CHAT_ID allowlist is empty.'
+				: '⛔ Unauthorized';
+			await this.sendTelegramReply(c, chatId, msg);
 			return;
 		}
 
 		const rawCommand = text.split(/\s+/)[0];
 		const command = rawCommand.includes('@') ? rawCommand.split('@')[0] : rawCommand;
+		console.log(`Telegram bot command received chat_id=${chatId} command=${command}`);
 
 		let reply = '';
 		switch (command) {
