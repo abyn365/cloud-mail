@@ -1016,6 +1016,9 @@ Use buttons below or type commands manually:
 				if (args?.[0] === 'page') {
 					return await this.formatMailCommand(c, Number(args?.[1] || 1));
 				}
+				if (/^\d+$/.test(String(args?.[0] || '')) && Number(args[0]) > 0 && Number(args[0]) <= 50) {
+					return await this.formatMailCommand(c, Number(args[0]));
+				}
 				if (args?.[0]) {
 					return await this.formatMailDetailCommand(c, args[0]);
 				}
@@ -1077,7 +1080,11 @@ Use buttons below or type commands manually:
 			const pagingMatch = /^cmd:(mail|users|invite|events):(\d+)$/.exec(callback.data);
 			if (pagingMatch) {
 				command = `/${pagingMatch[1]}`;
-				args = [pagingMatch[2]];
+				if (pagingMatch[1] === 'mail' || pagingMatch[1] === 'events') {
+					args = ['page', pagingMatch[2]];
+				} else {
+					args = [pagingMatch[2]];
+				}
 			} else if (/^cmd:mailid:(\d+)$/.test(callback.data)) {
 				const mailDetailMatch = /^cmd:mailid:(\d+)$/.exec(callback.data);
 				command = '/mail';
