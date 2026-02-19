@@ -147,7 +147,7 @@ const emailService = {
 			const userRow = await userService.selectById(c, userId);
 			const roleRow = await userService.selectEffectiveRole(c, userRow);
 			userRow.role = roleRow;
-			await telegramService.sendEmailDeleteNotification(c, emailIds, userRow);
+			await telegramService.sendEmailSoftDeleteNotification(c, emailIds, userRow);
 		} catch (e) {
 			console.error('Failed to send delete email notification:', e);
 		}
@@ -584,7 +584,7 @@ const emailService = {
 		await starService.removeByEmailIds(c, emailIds);
 		await orm(c).delete(email).where(inArray(email.emailId, emailIds)).run();
 
-		await this.sendDeleteNotification(c, userId, emailIds);
+		await this.sendDeleteNotification(c, userId, emailIds, 'hard');
 	},
 
 	async physicsDeleteUserIds(c, userIds) {
@@ -825,10 +825,10 @@ const emailService = {
 
 		await orm(c).delete(email).where(conditions.length > 1 ? and(...conditions) : conditions[0]).run();
 
-		await this.sendDeleteNotification(c, userId, emailIds);
+		await this.sendDeleteNotification(c, userId, emailIds, 'hard');
 	},
 
-	async sendDeleteNotification(c, userId, emailIds) {
+	async sendDeleteNotification(c, userId, emailIds, deleteType = 'soft') {
 		if (!userId || !emailIds?.length) {
 			return;
 		}
@@ -841,7 +841,11 @@ const emailService = {
 
 			const roleRow = await userService.selectEffectiveRole(c, userRow);
 			userRow.role = roleRow;
-			await telegramService.sendEmailDeleteNotification(c, emailIds.join(','), userRow);
+			if (deleteType === 'hard') {
+				await telegramService.sendEmailHardDeleteNotification(c, emailIds.join(','), userRow);
+			} else {
+				await telegramService.sendEmailSoftDeleteNotification(c, emailIds.join(','), userRow);
+			}
 		} catch (e) {
 			console.error('Failed to send delete email notification:', e);
 		}
