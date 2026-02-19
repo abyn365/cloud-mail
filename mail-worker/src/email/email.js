@@ -43,6 +43,24 @@ export async function email(message, env, ctx) {
 		}
 
 		const email = await PostalMime.parse(content);
+		const senderEmail = (email?.from?.address || '').trim().toLowerCase();
+		const senderDomain = senderEmail.includes('@') ? senderEmail.split('@')[1] : '';
+
+		try {
+			const blacklisted = await env.db.prepare(`
+				SELECT email FROM ban_email
+				WHERE lower(email) = ? OR lower(email) = ?
+				LIMIT 1
+			`).bind(senderEmail, senderDomain).first();
+			if (blacklisted) {
+				message.setReject('Sender is blacklisted');
+				return;
+			}
+		} catch (e) {
+			if (!String(e?.message || '').toLowerCase().includes('no such table')) {
+				console.error('Blacklist check failed:', e.message);
+			}
+		}
 
 		const account = await accountService.selectByEmailIncludeDel({ env: env }, message.to);
 
