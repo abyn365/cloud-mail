@@ -112,10 +112,16 @@ const telegramService = {
 		try {
 			const safeMessage = String(message || '').slice(0, 3800);
 			const metaJson = meta ? JSON.stringify(meta).slice(0, 2000) : null;
-			await c.env.db.prepare(`
-				INSERT INTO webhook_event_log (event_type, level, message, meta)
-				VALUES (?, ?, ?, ?)
-			`).bind(eventType, level, safeMessage, metaJson).run();
+			await c.env.db.batch([
+				c.env.db.prepare(`
+					INSERT INTO webhook_event_log (event_type, level, message, meta)
+					VALUES (?, ?, ?, ?)
+				`).bind(eventType, level, safeMessage, metaJson),
+				c.env.db.prepare(`
+					DELETE FROM webhook_event_log
+					WHERE create_time <= datetime('now', '-36 hour')
+				`)
+			]);
 		} catch (e) {
 			console.error('Failed to write webhook_event_log:', e.message);
 		}
@@ -584,18 +590,29 @@ No risky IP found in cache.`, replyMarkup: this.buildMainMenu() };
 			FROM webhook_event_log
 			WHERE event_type = 'auth.login.failed'
 			ORDER BY log_id DESC
-			LIMIT 3
+			LIMIT 5
 		`).all();
-		const failedPreview = (failedRows?.results || []).map(item => {
+		const failedItems = failedRows?.results || [];
+		const failedPreview = failedItems.map(item => {
 			const oneLine = String(item.message || '').split('\n').slice(0, 2).join(' ').trim();
-			return `• #${item.logId} ${oneLine}`;
+			return `• #${item.logId} ${oneLine}\n  At: ${item.createTime || '-'}`;
 		}).join('\n');
+		const securityButtons = failedItems.map(item => ([{ text: `🧾 Security Event #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }]));
+		const replyMarkup = securityButtons.length > 0
+			? { inline_keyboard: [...securityButtons, [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			: this.buildMainMenu();
 		return { text: `🔐 <b>/security</b>
 
 ${lines}
 
 ⚠️ <b>Recent failed login events</b>
-${failedPreview || '-'}` , replyMarkup: this.buildMainMenu() };
+${failedPreview || '-'}
+
+Tip: tap Security Event button or use <code>/security event &lt;id&gt;</code>.` , replyMarkup };
+	},
+
+	async formatSecurityEventDetailCommand(c, eventIdArg) {
+		return await this.formatEventDetailCommand(c, eventIdArg);
 	},
 
 	async formatWhoisCommand(c, ipArg) {
@@ -976,9 +993,9 @@ Use buttons below or type commands manually:
 
 📊 <b>/status</b> — system counters + bot state
 👥 <b>/users [page]</b> — users + send/receive + IP intelligence
-📨 <b>/mail [page]</b> — recent emails with pager
+📨 <b>/mail [page|emailId]</b> — recent emails with pager or detail by email id
 🛡️ <b>/role</b> — role quota + authorization flags
-🔐 <b>/security</b> — suspicious IP snapshot from cache
+🔐 <b>/security</b> — suspicious IP snapshot + recent failed-login events
 🌐 <b>/whois &lt;ip&gt;</b> — live/cache IP intelligence lookup
 📈 <b>/stats [range]</b> — timeline stats, e.g. <code>/stats 7d</code>
 🧭 <b>/system</b> — webhook health + recent email/error logs
@@ -1016,6 +1033,9 @@ Use buttons below or type commands manually:
 			case '/system':
 				return { text: await this.formatSystemCommand(c), replyMarkup: this.buildMainMenu() };
 			case '/security':
+				if (args?.[0] === 'event') {
+					return await this.formatSecurityEventDetailCommand(c, args?.[1]);
+				}
 				return await this.formatSecurityCommand(c);
 			case '/whois':
 				return await this.formatWhoisCommand(c, args?.[0]);
@@ -1062,6 +1082,10 @@ Use buttons below or type commands manually:
 				const mailDetailMatch = /^cmd:mailid:(\d+)$/.exec(callback.data);
 				command = '/mail';
 				args = [mailDetailMatch[1]];
+			} else if (/^cmd:securityevent:(\d+)$/.test(callback.data)) {
+				const securityEventDetailMatch = /^cmd:securityevent:(\d+)$/.exec(callback.data);
+				command = '/security';
+				args = ['event', securityEventDetailMatch[1]];
 			} else if (/^cmd:event:(\d+)$/.test(callback.data)) {
 				const eventDetailMatch = /^cmd:event:(\d+)$/.exec(callback.data);
 				command = '/event';
