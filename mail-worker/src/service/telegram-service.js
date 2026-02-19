@@ -356,12 +356,14 @@ const telegramService = {
 			.filter(Boolean);
 	},
 
-	isAllowedChat(c, chatId) {
+	isAllowedChat(c, chatId, userId) {
 		const allowed = this.parseAllowedChatIds(c);
 		if (allowed.length === 0) {
 			return false;
 		}
-		return allowed.includes(String(chatId));
+		const chatIdStr = String(chatId);
+		const userIdStr = userId !== undefined && userId !== null ? String(userId) : null;
+		return allowed.includes(chatIdStr) || (userIdStr && allowed.includes(userIdStr));
 	},
 
 	async sendTelegramReply(c, chatId, message) {
@@ -483,22 +485,23 @@ Send Emails: ${numberCount.sendEmailCount}
 		const message = body?.message || body?.edited_message || body?.channel_post;
 		const text = message?.text?.trim();
 		const chatId = message?.chat?.id;
+		const userId = message?.from?.id;
 		if (!text || !chatId) {
 			return;
 		}
 
-		if (!this.isAllowedChat(c, chatId)) {
+		if (!this.isAllowedChat(c, chatId, userId)) {
 			const allowed = this.parseAllowedChatIds(c);
 			const msg = allowed.length === 0
 				? '⛔ Unauthorized\nReason: CHAT_ID allowlist is empty.'
-				: '⛔ Unauthorized';
+				: `⛔ Unauthorized\nAllowed: ${allowed.join(', ')}\nCurrent chat_id: ${chatId}${userId ? `\nCurrent user_id: ${userId}` : ''}`;
 			await this.sendTelegramReply(c, chatId, msg);
 			return;
 		}
 
 		const rawCommand = text.split(/\s+/)[0];
 		const command = rawCommand.includes('@') ? rawCommand.split('@')[0] : rawCommand;
-		console.log(`Telegram bot command received chat_id=${chatId} command=${command}`);
+		console.log(`Telegram bot command received chat_id=${chatId} user_id=${userId || '-'} command=${command}`);
 
 		let reply = '';
 		switch (command) {
