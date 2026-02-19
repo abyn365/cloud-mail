@@ -1130,9 +1130,9 @@ Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 		const blacklistRows = await c.env.db.prepare(`
 			SELECT log_id as logId, message, meta, create_time as createTime
 			FROM webhook_event_log
-			WHERE event_type = 'security.blacklist.blocked'
+			WHERE event_type IN ('security.blacklist.blocked', 'security.outbound.blocked')
 			ORDER BY log_id DESC
-			LIMIT 5
+			LIMIT 6
 		`).all();
 		const blacklistItems = blacklistRows?.results || [];
 
@@ -1154,8 +1154,13 @@ Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 			? blacklistItems.map(item => {
 				let meta = {};
 				try { meta = JSON.parse(item.meta || '{}'); } catch (_) {}
+				const isOutbound = item.eventType === 'security.outbound.blocked' ||
+					String(item.message || '').includes('Outbound');
+				const icon = isOutbound ? '📤' : '📥';
+				const dir = isOutbound ? 'OUT' : 'IN';
 				const hasPreview = blacklistPreviewMap.has(item.logId) ? ' 🔎' : '';
-				return `• #${item.logId}${hasPreview} From: <code>${meta.senderEmail || '-'}</code> → <code>${meta.to || '-'}</code>\n  Subj: ${meta.subject || '-'}\n  Rule: ${meta.matchedRule || '-'} | At: ${item.createTime || '-'}`;
+				const actor = isOutbound && meta.actorEmail ? `\n  Actor: <code>${meta.actorEmail}</code> (#${meta.actorUserId || '-'}) IP: ${meta.actorIp || '-'}` : '';
+				return `• ${icon} [${dir}] #${item.logId}${hasPreview} From: <code>${meta.senderEmail || meta.actorEmail || '-'}</code> → <code>${meta.to || meta.toEmail || '-'}</code>\n  Subj: ${meta.subject || '-'} | Rule: ${meta.matchedRule || '-'}${actor}\n  At: ${item.createTime || '-'}`;
 			}).join('\n')
 			: '-';
 		// ─────────────────────────────────────────────────────────────────────
@@ -1398,18 +1403,12 @@ At: ${item.createTime}`).join('\n\n');
 		const backPage = Math.max(1, Number(pageArg || 1));
 		if (!emailId) return { text: `📨 <b>/mail</b>\nUsage: <code>/mail 120</code>`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: 'cmd:mail:1' }) };
 
-		const row = await orm(c).select({
-			emailId: email.emailId,
-			sendEmail: email.sendEmail,
-			toEmail: email.toEmail,
-			subject: email.subject,
-			text: email.text,
-			type: email.type,
-			status: email.status,
-			createTime: email.createTime,
-			userId: email.userId,
-			unread: email.unread
-		}).from(email).where(eq(email.emailId, emailId)).get();
+		const row = await c.env.db.prepare(`
+			SELECT email_id as emailId, send_email as sendEmail, to_email as toEmail,
+				subject, text, type, status, create_time as createTime,
+				user_id as userId, unread, is_del as isDel
+			FROM email WHERE email_id = ?
+		`).bind(emailId).first();
 
 		if (!row) return { text: `📨 Email #${emailId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: `cmd:mail:${backPage}` }) };
 
@@ -1420,11 +1419,18 @@ At: ${item.createTime}`).join('\n\n');
 		const statusMap = { 0: 'Saving', 1: 'Received', 2: 'Sent', 3: 'Delivered', 4: 'Bounced', 5: 'Failed', 6: 'Complained', 7: 'Delayed', 8: 'No recipient' };
 		const preview = (row.text || '').slice(0, 200);
 
+		const isDelLabel = row.isDel === 1
+			? '🗑️ Soft deleted (is_del=1) — hidden from user'
+			: row.isDel === 2
+				? '💥 Hard deleted (is_del=2)'
+				: '✅ Active (not deleted)';
+
 		const detail = `📧 <b>Email #${row.emailId}</b>
 
 📥/📤 Type: ${row.type === 0 ? 'Received' : 'Sent'}
 📊 Status: ${statusMap[row.status] || row.status}
 👁️ Read: ${row.unread ? 'Unread' : 'Read'}
+🗑️ Deleted: ${isDelLabel}
 
 📤 From: <code>${row.sendEmail || '-'}</code>
 📨 To: <code>${row.toEmail || '-'}</code>
@@ -1786,8 +1792,9 @@ ${historyText}`;
 
 	async formatSecurityBlacklistCommand(c, subArg, targetArg) {
 		const sub = String(subArg || 'list').toLowerCase();
-		const target = String(targetArg || '').trim();
-		const normalizedTarget = this.normalizeBlacklistTarget(target);
+		// Support multiple targets separated by comma or space-after-comma
+		const rawTargets = String(targetArg || '').trim();
+		const targets = rawTargets.split(/[\s,]+/).map(t => t.trim()).filter(Boolean);
 
 		try {
 			await c.env.db.prepare(`
@@ -1797,78 +1804,74 @@ ${historyText}`;
 					create_time TEXT DEFAULT (datetime('now'))
 				)
 			`).run();
-		} catch (e) {
-		}
+		} catch (e) {}
+
+		const backMarkup = { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
 
 		if (sub === 'add' || sub === 'remove') {
-			if (!target) return {
-				text: `🚫 Usage: <code>/security blacklist ${sub} email@example.com</code>`,
-				replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			if (!targets.length) return {
+				text: `🚫 Usage:\n• <code>/security blacklist ${sub} email@ex.com</code>\n• <code>/security blacklist ${sub} evil.com,spam.net,bad@x.com</code>`,
+				replyMarkup: backMarkup
 			};
-			if (!normalizedTarget) return {
-				text: '❌ Invalid target. Use a valid email (user@ex.com) or domain (example.com).',
-				replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-			};
-			const safeTarget = this.escapeHtml(normalizedTarget);
 
-			if (sub === 'add') {
-				try {
-					const existing = await c.env.db.prepare('SELECT id FROM ban_email WHERE lower(email) = ?').bind(normalizedTarget).first();
-					if (existing) return {
-						text: `🚫 <code>${safeTarget}</code> is already blacklisted.`,
-						replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-					};
-					await c.env.db.prepare("INSERT INTO ban_email (email, create_time) VALUES (?, datetime('now'))").bind(normalizedTarget).run();
-					await this.logSystemEvent(c, 'admin.blacklist.add', EVENT_LEVEL.WARN, `Blacklisted: ${normalizedTarget}`, { email: normalizedTarget });
-					return {
-						text: `✅ <b>Blacklisted</b> <code>${safeTarget}</code>`,
-						replyMarkup: { inline_keyboard: [[{ text: '🚫 View Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-					};
-				} catch (e) {
-					return { text: `❌ Failed to add to blacklist: ${e.message}`, replyMarkup: this.buildMainMenu() };
-				}
-			} else {
-				try {
-					const res = await c.env.db.prepare('DELETE FROM ban_email WHERE lower(email) = ?').bind(normalizedTarget).run();
-					if (!res.meta?.changes) return {
-						text: `⚠️ <code>${safeTarget}</code> not found in blacklist.`,
-						replyMarkup: { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-					};
-					await this.logSystemEvent(c, 'admin.blacklist.remove', EVENT_LEVEL.INFO, `Removed from blacklist: ${normalizedTarget}`, { email: normalizedTarget });
-					return {
-						text: `✅ <b>Removed from blacklist</b>: <code>${safeTarget}</code>`,
-						replyMarkup: { inline_keyboard: [[{ text: '🚫 View Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-					};
-				} catch (e) {
-					return { text: `❌ Failed to remove from blacklist: ${e.message}`, replyMarkup: this.buildMainMenu() };
+			const results = { added: [], skipped: [], removed: [], notFound: [], invalid: [] };
+
+			for (const target of targets) {
+				const normalized = this.normalizeBlacklistTarget(target);
+				if (!normalized) { results.invalid.push(target); continue; }
+				const safe = this.escapeHtml(normalized);
+
+				if (sub === 'add') {
+					try {
+						const existing = await c.env.db.prepare('SELECT id FROM ban_email WHERE lower(email) = ?').bind(normalized).first();
+						if (existing) { results.skipped.push(safe); continue; }
+						await c.env.db.prepare(`INSERT INTO ban_email (email, create_time) VALUES (?, datetime('now'))`).bind(normalized).run();
+						results.added.push(safe);
+					} catch (e) { results.invalid.push(safe); }
+				} else {
+					try {
+						const res = await c.env.db.prepare('DELETE FROM ban_email WHERE lower(email) = ?').bind(normalized).run();
+						if (!res.meta?.changes) { results.notFound.push(safe); continue; }
+						results.removed.push(safe);
+					} catch (e) { results.invalid.push(safe); }
 				}
 			}
+
+			if (results.added.length) await this.logSystemEvent(c, 'admin.blacklist.add', EVENT_LEVEL.WARN, `Blacklisted: ${results.added.join(', ')}`, { emails: results.added });
+			if (results.removed.length) await this.logSystemEvent(c, 'admin.blacklist.remove', EVENT_LEVEL.INFO, `Removed from blacklist: ${results.removed.join(', ')}`, { emails: results.removed });
+
+			const lines = [];
+			if (results.added.length) lines.push(`✅ Added (${results.added.length}): ${results.added.map(e => `<code>${e}</code>`).join(', ')}`);
+			if (results.removed.length) lines.push(`✅ Removed (${results.removed.length}): ${results.removed.map(e => `<code>${e}</code>`).join(', ')}`);
+			if (results.skipped.length) lines.push(`⚠️ Already exists: ${results.skipped.map(e => `<code>${e}</code>`).join(', ')}`);
+			if (results.notFound.length) lines.push(`⚠️ Not found: ${results.notFound.map(e => `<code>${e}</code>`).join(', ')}`);
+			if (results.invalid.length) lines.push(`❌ Invalid: ${results.invalid.map(e => `<code>${e}</code>`).join(', ')}`);
+
+			return { text: `🚫 <b>Blacklist ${sub === 'add' ? 'Add' : 'Remove'} Result</b>\n\n${lines.join('\n')}`, replyMarkup: backMarkup };
 		}
 
+		// List
 		try {
 			const rows = await c.env.db.prepare('SELECT id, email, create_time as createTime FROM ban_email ORDER BY id DESC LIMIT 20').all();
 			const items = rows?.results || [];
 			const body = items.length
-				? items.map(r => `🚫 <code>${this.escapeHtml(r.email)}</code> — added ${r.createTime || '-'}`).join('\n')
+				? items.map(r => `🚫 <code>${this.escapeHtml(r.email)}</code> — ${r.createTime || '-'}`).join('\n')
 				: '✅ Blacklist is empty.';
 
 			return {
-				text: `🚫 <b>Email Blacklist</b>\n\n${body}\n\n<b>Commands:</b>\n• <code>/security blacklist add email@ex.com</code>\n• <code>/security blacklist add domain.com</code>\n• <code>/security blacklist remove email@ex.com</code>`,
-				replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+				text: `🚫 <b>Email/Domain Blacklist</b>\n\n${body}\n\n<b>Commands (batch supported with comma):</b>\n• <code>/security blacklist add evil.com,spam@x.com</code>\n• <code>/security blacklist remove evil.com,spam@x.com</code>`,
+				replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🔑 Keywords', callback_data: 'cmd:keyword' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
 			};
 		} catch (e) {
-			return {
-				text: `🚫 <b>Email Blacklist</b>\n\nError loading blacklist: ${e.message}`,
-				replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-			};
+			return { text: `🚫 <b>Email Blacklist</b>\n\nError: ${e.message}`, replyMarkup: backMarkup };
 		}
 	},
 
-	// ─── SECURITY: KEYWORD BLACKLIST MANAGEMENT ──────────────────────────────
-
 	async formatSecurityKeywordCommand(c, subArg, keywordArg) {
 		const sub = String(subArg || 'list').toLowerCase();
-		const keyword = String(keywordArg || '').trim().toLowerCase();
+		const rawKeywords = String(keywordArg || '').trim().toLowerCase();
+		const keywords = rawKeywords.split(/[\s,]+/).map(k => k.trim()).filter(k => k.length >= 2);
+		const tooShort = rawKeywords.split(/[\s,]+/).map(k => k.trim()).filter(k => k.length > 0 && k.length < 2);
 
 		try {
 			await c.env.db.prepare(`
@@ -1880,53 +1883,45 @@ ${historyText}`;
 			`).run();
 		} catch (e) {}
 
-		const backMarkup = { inline_keyboard: [[{ text: '🔑 Keyword List', callback_data: 'cmd:keyword' }, { text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		const backMarkup = { inline_keyboard: [[{ text: '🔑 Keywords', callback_data: 'cmd:keyword' }, { text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
 
-		if (sub === 'add') {
-			if (!keyword) return {
-				text: `🔑 Usage: <code>/security keyword add judi</code>`,
+		if (sub === 'add' || sub === 'remove') {
+			if (!keywords.length && !tooShort.length) return {
+				text: `🔑 Usage:\n• <code>/security keyword ${sub} judi</code>\n• <code>/security keyword ${sub} judi,gacor,slot,togel</code>`,
 				replyMarkup: backMarkup
 			};
-			if (keyword.length < 2) return {
-				text: `❌ Keyword terlalu pendek (min 2 karakter).`,
-				replyMarkup: backMarkup
-			};
-			try {
-				const existing = await c.env.db.prepare('SELECT id FROM ban_keyword WHERE lower(keyword) = ?').bind(keyword).first();
-				if (existing) return {
-					text: `⚠️ Keyword <code>${this.escapeHtml(keyword)}</code> sudah ada.`,
-					replyMarkup: backMarkup
-				};
-				await c.env.db.prepare(`INSERT INTO ban_keyword (keyword, create_time) VALUES (?, datetime('now'))`).bind(keyword).run();
-				await this.logSystemEvent(c, 'admin.keyword.add', EVENT_LEVEL.WARN, `Keyword added: "${keyword}"`, { keyword });
-				return {
-					text: `✅ <b>Keyword ditambahkan:</b> <code>${this.escapeHtml(keyword)}</code>\n\nEmail yang mengandung kata ini di subject/body akan diblokir secara diam-diam.`,
-					replyMarkup: backMarkup
-				};
-			} catch (e) {
-				return { text: `❌ Gagal menambahkan keyword: ${e.message}`, replyMarkup: backMarkup };
-			}
-		}
 
-		if (sub === 'remove') {
-			if (!keyword) return {
-				text: `🔑 Usage: <code>/security keyword remove judi</code>`,
-				replyMarkup: backMarkup
-			};
-			try {
-				const res = await c.env.db.prepare('DELETE FROM ban_keyword WHERE lower(keyword) = ?').bind(keyword).run();
-				if (!res.meta?.changes) return {
-					text: `⚠️ Keyword <code>${this.escapeHtml(keyword)}</code> tidak ditemukan.`,
-					replyMarkup: backMarkup
-				};
-				await this.logSystemEvent(c, 'admin.keyword.remove', EVENT_LEVEL.INFO, `Keyword removed: "${keyword}"`, { keyword });
-				return {
-					text: `✅ <b>Keyword dihapus:</b> <code>${this.escapeHtml(keyword)}</code>`,
-					replyMarkup: backMarkup
-				};
-			} catch (e) {
-				return { text: `❌ Gagal menghapus keyword: ${e.message}`, replyMarkup: backMarkup };
+			const results = { added: [], skipped: [], removed: [], notFound: [], tooShort };
+
+			for (const kw of keywords) {
+				const safe = this.escapeHtml(kw);
+				if (sub === 'add') {
+					try {
+						const existing = await c.env.db.prepare('SELECT id FROM ban_keyword WHERE lower(keyword) = ?').bind(kw).first();
+						if (existing) { results.skipped.push(safe); continue; }
+						await c.env.db.prepare(`INSERT INTO ban_keyword (keyword, create_time) VALUES (?, datetime('now'))`).bind(kw).run();
+						results.added.push(safe);
+					} catch (e) { results.skipped.push(safe); }
+				} else {
+					try {
+						const res = await c.env.db.prepare('DELETE FROM ban_keyword WHERE lower(keyword) = ?').bind(kw).run();
+						if (!res.meta?.changes) { results.notFound.push(safe); continue; }
+						results.removed.push(safe);
+					} catch (e) { results.notFound.push(safe); }
+				}
 			}
+
+			if (results.added.length) await this.logSystemEvent(c, 'admin.keyword.add', EVENT_LEVEL.WARN, `Keywords added: ${results.added.join(', ')}`, { keywords: results.added });
+			if (results.removed.length) await this.logSystemEvent(c, 'admin.keyword.remove', EVENT_LEVEL.INFO, `Keywords removed: ${results.removed.join(', ')}`, { keywords: results.removed });
+
+			const lines = [];
+			if (results.added.length) lines.push(`✅ Added (${results.added.length}): ${results.added.map(k => `<code>${k}</code>`).join(', ')}`);
+			if (results.removed.length) lines.push(`✅ Removed (${results.removed.length}): ${results.removed.map(k => `<code>${k}</code>`).join(', ')}`);
+			if (results.skipped.length) lines.push(`⚠️ Already exists: ${results.skipped.map(k => `<code>${k}</code>`).join(', ')}`);
+			if (results.notFound.length) lines.push(`⚠️ Not found: ${results.notFound.map(k => `<code>${k}</code>`).join(', ')}`);
+			if (results.tooShort.length) lines.push(`❌ Too short (min 2 chars): ${results.tooShort.map(k => `<code>${k}</code>`).join(', ')}`);
+
+			return { text: `🔑 <b>Keyword ${sub === 'add' ? 'Add' : 'Remove'} Result</b>\n\n${lines.join('\n')}`, replyMarkup: backMarkup };
 		}
 
 		// List
@@ -1934,18 +1929,15 @@ ${historyText}`;
 			const rows = await c.env.db.prepare('SELECT id, keyword, create_time as createTime FROM ban_keyword ORDER BY id DESC LIMIT 30').all();
 			const items = rows?.results || [];
 			const body = items.length
-				? items.map(r => `🔑 <code>${this.escapeHtml(r.keyword)}</code> — added ${r.createTime || '-'}`).join('\n')
+				? items.map(r => `🔑 <code>${this.escapeHtml(r.keyword)}</code> — ${r.createTime || '-'}`).join('\n')
 				: '✅ Keyword list is empty.';
 
 			return {
-				text: `🔑 <b>Keyword Blacklist</b>\n\n${body}\n\n<b>Commands:</b>\n• <code>/security keyword add judi</code>\n• <code>/security keyword add gacor</code>\n• <code>/security keyword remove judi</code>\n\n<i>Dicek di: subject + body email (case-insensitive)</i>`,
+				text: `🔑 <b>Keyword Blacklist</b>\n\n${body}\n\n<b>Commands (batch dengan koma):</b>\n• <code>/security keyword add judi,gacor,slot,togel</code>\n• <code>/security keyword remove judi,gacor</code>\n\n<i>Dicek di: subject + body email (case-insensitive)\nBerlaku untuk email masuk DAN keluar.</i>`,
 				replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
 			};
 		} catch (e) {
-			return {
-				text: `🔑 <b>Keyword Blacklist</b>\n\nError: ${e.message}`,
-				replyMarkup: backMarkup
-			};
+			return { text: `🔑 <b>Keyword Blacklist</b>\n\nError: ${e.message}`, replyMarkup: backMarkup };
 		}
 	},
 
@@ -1977,6 +1969,121 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 			);
 		} else {
 			await this.sendTelegramMessage(c, message);
+		}
+	},
+
+	// ─── OUTBOUND FILTER: CHECK & NOTIFY ─────────────────────────────────────
+
+	/**
+	 * Call this from email-send service BEFORE actually sending.
+	 * Returns { blocked: true, reason, matchedRule } if blocked, else { blocked: false }.
+	 */
+	async checkOutboundFilter(c, { toEmail, subject, bodyText }) {
+		const toEmailLower = (toEmail || '').trim().toLowerCase();
+		const toDomain = toEmailLower.includes('@') ? toEmailLower.split('@')[1] : '';
+
+		// 1. Check recipient domain/email against ban_email
+		try {
+			const blacklisted = await c.env.db.prepare(`
+				SELECT email FROM ban_email
+				WHERE lower(email) = ? OR lower(email) = ?
+				LIMIT 1
+			`).bind(toEmailLower, toDomain).first();
+			if (blacklisted) {
+				return { blocked: true, reason: 'blacklist', matchedRule: blacklisted.email };
+			}
+		} catch (e) {
+			if (!String(e?.message || '').toLowerCase().includes('no such table')) {
+				console.error('Outbound blacklist check failed:', e.message);
+			}
+		}
+
+		// 2. Check subject + body against ban_keyword
+		try {
+			const { results: keywords } = await c.env.db.prepare(`
+				SELECT id, keyword FROM ban_keyword ORDER BY id ASC
+			`).all();
+			if (keywords?.length) {
+				const combined = ((subject || '') + ' ' + (bodyText || '')).toLowerCase();
+				const matched = keywords.find(k => combined.includes(String(k.keyword || '').toLowerCase()));
+				if (matched) {
+					return { blocked: true, reason: 'keyword', matchedRule: `keyword:${matched.keyword}` };
+				}
+			}
+		} catch (e) {
+			if (!String(e?.message || '').toLowerCase().includes('no such table')) {
+				console.error('Outbound keyword check failed:', e.message);
+			}
+		}
+
+		return { blocked: false };
+	},
+
+	/**
+	 * Log a blocked outbound email attempt to security board (silent, no push).
+	 */
+	async logOutboundBlocked(c, { actorUser, toEmail, subject, bodyText, matchedRule, reason }) {
+		try {
+			await c.env.db.prepare(`
+				CREATE TABLE IF NOT EXISTS ban_email_log (
+					id INTEGER PRIMARY KEY AUTOINCREMENT,
+					sender_email TEXT,
+					to_email TEXT,
+					matched_rule TEXT,
+					subject TEXT,
+					text_preview TEXT,
+					html_content TEXT,
+					create_time TEXT DEFAULT (datetime('now'))
+				)
+			`).run();
+
+			const textPreview = (bodyText || '').slice(0, 500);
+
+			await c.env.db.batch([
+				c.env.db.prepare(`
+					INSERT INTO ban_email_log (sender_email, to_email, matched_rule, subject, text_preview, html_content, create_time)
+					VALUES (?, ?, ?, ?, ?, '', datetime('now'))
+				`).bind(
+					actorUser?.email || '-',
+					toEmail || '-',
+					matchedRule || '-',
+					subject || '',
+					textPreview
+				),
+				c.env.db.prepare(`
+					DELETE FROM ban_email_log WHERE create_time <= datetime('now', '-24 hour')
+				`)
+			]);
+
+			const lastRow = await c.env.db.prepare(`
+				SELECT id FROM ban_email_log
+				WHERE sender_email = ? AND to_email = ?
+				ORDER BY id DESC LIMIT 1
+			`).bind(actorUser?.email || '-', toEmail || '-').first();
+
+			const banLogId = lastRow?.id || null;
+
+			const actorIp = actorUser?.activeIp || '-';
+			const actorRole = actorUser?.roleLabel || '-';
+
+			await this.logSystemEvent(
+				c,
+				'security.outbound.blocked',
+				'warn',
+				`🚫 Outbound email blocked (${reason})\n👤 Actor: ${actorUser?.email || '-'} (#${actorUser?.userId || '-'})\n🛡️ Role: ${actorRole}\n📍 IP: ${actorIp}\n📨 To: ${toEmail}\n🔑 Matched: ${matchedRule}\n📝 Subject: ${subject || '-'}`,
+				{
+					actorEmail: actorUser?.email,
+					actorUserId: actorUser?.userId,
+					actorIp,
+					toEmail,
+					subject,
+					matchedRule,
+					reason,
+					banLogId
+				}
+			);
+		} catch (e) {
+			console.error('Failed to log outbound block:', e.message);
 		}
 	},
 
