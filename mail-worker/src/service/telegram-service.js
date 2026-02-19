@@ -554,6 +554,18 @@ const telegramService = {
 		return { inline_keyboard: [buttons, [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
 	},
 
+	buildDetailMenu({ backText, backCallbackData, previewUrl }) {
+		const rows = [];
+		if (previewUrl) {
+			rows.push([{ text: '🔎 Open Email Preview', web_app: { url: previewUrl } }]);
+		}
+		rows.push([
+			{ text: backText || '⬅️ Back to List', callback_data: backCallbackData || 'cmd:menu' },
+			{ text: '🏠 Menu', callback_data: 'cmd:menu' }
+		]);
+		return { inline_keyboard: rows };
+	},
+
 	parseRangeDays(rangeArg = '7d') {
 		const value = String(rangeArg || '7d').trim().toLowerCase();
 		const match = /^(\d{1,2})d$/.exec(value);
@@ -612,7 +624,7 @@ Tip: tap Security Event button or use <code>/security event &lt;id&gt;</code>.` 
 	},
 
 	async formatSecurityEventDetailCommand(c, eventIdArg) {
-		return await this.formatEventDetailCommand(c, eventIdArg);
+		return await this.formatEventDetailCommand(c, eventIdArg, { fromSecurity: true });
 	},
 
 	async formatWhoisCommand(c, ipArg) {
@@ -698,7 +710,7 @@ No webhook event logs yet.`, replyMarkup: this.buildMainMenu() };
 				const truncated = lines.length > 3 ? '\n…' : '';
 				return `#${item.logId} [${item.level}] ${item.eventType}\n${preview}${truncated}\nAt: ${item.createTime}`;
 			}).join('\n\n');
-			const eventButtons = visible.map(item => [{ text: `🧾 #${item.logId} ${item.eventType}`, callback_data: `cmd:event:${item.logId}` }]);
+			const eventButtons = visible.map(item => [{ text: `🧾 #${item.logId} ${item.eventType}`, callback_data: `cmd:event:${item.logId}:${currentPage}` }]);
 			const pagerMarkup = this.buildPager('events', currentPage, hasNext);
 			const replyMarkup = {
 				inline_keyboard: [...eventButtons, ...(pagerMarkup?.inline_keyboard || [])]
@@ -714,11 +726,13 @@ Unable to query event log: ${e.message}`, replyMarkup: this.buildMainMenu() };
 		}
 	},
 
-	async formatEventDetailCommand(c, idArg) {
+	async formatEventDetailCommand(c, idArg, options = {}) {
 		const logId = Number(idArg || 0);
+		const fromSecurity = Boolean(options?.fromSecurity);
+		const backPage = Math.max(1, Number(options?.backPage || 1));
 		if (!logId) {
 			return { text: `🧾 <b>/event</b>
-Usage: <code>/event 123</code>`, replyMarkup: this.buildMainMenu() };
+Usage: <code>/event 123</code>`, replyMarkup: this.buildDetailMenu({ backText: '🗂 Events List', backCallbackData: 'cmd:events:1' }) };
 		}
 		const row = await c.env.db.prepare(`
 			SELECT log_id as logId, event_type as eventType, level, message, meta, create_time as createTime
@@ -727,7 +741,7 @@ Usage: <code>/event 123</code>`, replyMarkup: this.buildMainMenu() };
 		`).bind(logId).first();
 		if (!row) {
 			return { text: `🧾 <b>/event</b>
-Event #${logId} not found.`, replyMarkup: this.buildMainMenu() };
+Event #${logId} not found.`, replyMarkup: this.buildDetailMenu({ backText: fromSecurity ? '🔐 Security List' : '🗂 Events List', backCallbackData: fromSecurity ? 'cmd:security' : `cmd:events:${backPage}` }) };
 		}
 		let meta = {};
 		try { meta = row.meta ? JSON.parse(row.meta) : {}; } catch (_) {}
@@ -740,9 +754,11 @@ At: ${row.createTime}
 Message: ${row.message}
 
 Meta: <code>${JSON.stringify(meta || {}, null, 2).slice(0, 1200)}</code>`;
-		const replyMarkup = previewUrl
-			? { inline_keyboard: [[{ text: '🔎 Open Email Preview', web_app: { url: previewUrl } }], [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-			: this.buildMainMenu();
+		const replyMarkup = this.buildDetailMenu({
+			backText: fromSecurity ? '🔐 Security List' : '🗂 Events List',
+			backCallbackData: fromSecurity ? 'cmd:security' : `cmd:events:${backPage}`,
+			previewUrl
+		});
 		return { text: detail, replyMarkup };
 	},
 
@@ -768,7 +784,7 @@ From: <code>${item.sendEmail || '-'}</code>
 To: <code>${item.toEmail || '-'}</code>
 Subj: ${item.subject || '-'}
 At: ${item.createTime}`).join('\n\n');
-		const mailButtons = visibleRows.map(item => [{ text: `✉️ #${item.emailId} ${item.subject || '(no subject)'}`.slice(0, 64), callback_data: `cmd:mailid:${item.emailId}` }]);
+		const mailButtons = visibleRows.map(item => [{ text: `✉️ #${item.emailId} ${item.subject || '(no subject)'}`.slice(0, 64), callback_data: `cmd:mailid:${item.emailId}:${currentPage}` }]);
 		const pagerMarkup = this.buildPager('mail', currentPage, hasNext);
 		const replyMarkup = {
 			inline_keyboard: [...mailButtons, ...(pagerMarkup?.inline_keyboard || [])]
@@ -780,10 +796,11 @@ ${body}
 Tip: tap mail buttons below or use <code>/mail &lt;emailId&gt;</code> for detail + preview.`, replyMarkup };
 	},
 
-	async formatMailDetailCommand(c, emailIdArg) {
+	async formatMailDetailCommand(c, emailIdArg, pageArg = 1) {
 		const emailId = Number(emailIdArg || 0);
+		const backPage = Math.max(1, Number(pageArg || 1));
 		if (!emailId) {
-			return { text: `📨 <b>/mail</b>\nUsage: <code>/mail 120</code> (detail) or <code>/mail 1</code> (page).`, replyMarkup: this.buildMainMenu() };
+			return { text: `📨 <b>/mail</b>\nUsage: <code>/mail 120</code> (detail) or <code>/mail 1</code> (page).`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: 'cmd:mail:1' }) };
 		}
 		const row = await orm(c).select({
 			emailId: email.emailId,
@@ -796,7 +813,7 @@ Tip: tap mail buttons below or use <code>/mail &lt;emailId&gt;</code> for detail
 			userId: email.userId
 		}).from(email).where(eq(email.emailId, emailId)).get();
 		if (!row) {
-			return { text: `📨 <b>/mail</b>\nEmail #${emailId} not found.`, replyMarkup: this.buildMainMenu() };
+			return { text: `📨 <b>/mail</b>\nEmail #${emailId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: `cmd:mail:${backPage}` }) };
 		}
 		const { customDomain } = await settingService.query(c);
 		const jwtToken = await jwtUtils.generateToken(c, { emailId: row.emailId });
@@ -822,9 +839,7 @@ Message: ${row.type === 0 ? '📥 Email Received' : '📤 Email Sent'}
 💬 Preview: ${(row.text || '').slice(0, 120) || '-'}
 
 Meta: <code>${JSON.stringify(meta, null, 2)}</code>`;
-		const replyMarkup = webAppUrl
-			? { inline_keyboard: [[{ text: '🔎 Open Email Preview', web_app: { url: webAppUrl } }], [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-			: this.buildMainMenu();
+		const replyMarkup = this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: `cmd:mail:${backPage}`, previewUrl: webAppUrl });
 		return { text: detail, replyMarkup };
 	},
 
@@ -961,9 +976,11 @@ Send Emails: ${numberCount.sendTotal}
 			const pending = webhookInfo?.result?.pending_update_count ?? '-';
 			const lastError = webhookInfo?.result?.last_error_message || '-';
 			const pushMode = await this.shouldSendWebhookPush(c) ? 'Push + Log' : 'Log only (default, no spam)';
-			const logs = (recentSystemLogs?.results || []).map((row, index) =>
-				`${index + 1}. [${row.createTime || '-'}] [${row.level || '-'}] ${row.eventType}: ${row.message}`
-			).join('\n');
+			const logs = (recentSystemLogs?.results || []).map((row, index) => {
+				const firstLine = String(row.message || '').split('\n').find(Boolean) || '-';
+				const shortLine = firstLine.length > 180 ? `${firstLine.slice(0, 177)}...` : firstLine;
+				return `${index + 1}. [${row.createTime || '-'}] [${row.level || '-'}] ${row.eventType}: ${shortLine}`;
+			}).join('\n');
 		return `🧭 <b>/system</b>
 
 IP Cache Rows: ${cacheCount?.total || 0}
@@ -1020,7 +1037,7 @@ Use buttons below or type commands manually:
 					return await this.formatMailCommand(c, Number(args[0]));
 				}
 				if (args?.[0]) {
-					return await this.formatMailDetailCommand(c, args[0]);
+					return await this.formatMailDetailCommand(c, args[0], args?.[1]);
 				}
 				return await this.formatMailCommand(c, pageArg);
 			case '/users':
@@ -1053,7 +1070,7 @@ Use buttons below or type commands manually:
 				}
 				return await this.formatEventsCommand(c, pageArg);
 			case '/event':
-				return await this.formatEventDetailCommand(c, args?.[0]);
+				return await this.formatEventDetailCommand(c, args?.[0], { backPage: args?.[1] });
 			default:
 				return await this.resolveCommand(c, '/help', [], chatId, userId);
 		}
@@ -1085,18 +1102,26 @@ Use buttons below or type commands manually:
 				} else {
 					args = [pagingMatch[2]];
 				}
+			} else if (/^cmd:mailid:(\d+):(\d+)$/.test(callback.data)) {
+				const mailDetailMatch = /^cmd:mailid:(\d+):(\d+)$/.exec(callback.data);
+				command = '/mail';
+				args = [mailDetailMatch[1], mailDetailMatch[2]];
 			} else if (/^cmd:mailid:(\d+)$/.test(callback.data)) {
 				const mailDetailMatch = /^cmd:mailid:(\d+)$/.exec(callback.data);
 				command = '/mail';
-				args = [mailDetailMatch[1]];
+				args = [mailDetailMatch[1], '1'];
 			} else if (/^cmd:securityevent:(\d+)$/.test(callback.data)) {
 				const securityEventDetailMatch = /^cmd:securityevent:(\d+)$/.exec(callback.data);
 				command = '/security';
 				args = ['event', securityEventDetailMatch[1]];
+			} else if (/^cmd:event:(\d+):(\d+)$/.test(callback.data)) {
+				const eventDetailMatch = /^cmd:event:(\d+):(\d+)$/.exec(callback.data);
+				command = '/event';
+				args = [eventDetailMatch[1], eventDetailMatch[2]];
 			} else if (/^cmd:event:(\d+)$/.test(callback.data)) {
 				const eventDetailMatch = /^cmd:event:(\d+)$/.exec(callback.data);
 				command = '/event';
-				args = [eventDetailMatch[1]];
+				args = [eventDetailMatch[1], '1'];
 			} else if (callback.data === 'cmd:stats:7d') {
 				command = '/stats';
 				args = ['7d'];
