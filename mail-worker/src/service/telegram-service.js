@@ -10,6 +10,7 @@ import timezone from 'dayjs/plugin/timezone';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 import { eq, desc } from 'drizzle-orm';
+import account from '../entity/account';
 import jwtUtils from '../utils/jwt-utils';
 import timezoneUtils from '../utils/timezone-utils';
 import emailMsgTemplate, {
@@ -242,6 +243,7 @@ const telegramService = {
 		await this.logSystemEvent(c, 'security.ip_changed', EVENT_LEVEL.WARN, `Recent IP updated for ${userInfo?.email || '-'}`, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false, relay: ipDetail?.security?.relay || false });
 		const message = ipSecurityMsgTemplate(userInfo, ipDetail);
 		await this.emitWebhookEvent(c, 'security.ip_changed', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false, relay: ipDetail?.security?.relay || false });
+		await this.sendSecurityEventAlert(c, `IP changed: <code>${userInfo?.activeIp || '-'}</code>`, `User: ${userInfo?.email || '-'} (#${userInfo?.userId || '-'})`);
 	},
 
 	async sendRegKeyManageNotification(c, action, regKeyInfo, actorInfo, extraInfo = {}) {
@@ -404,6 +406,7 @@ const telegramService = {
 		const ipDetail = await this.queryIpSecurity(c, ip);
 		const message = failedLoginMsgTemplate(email, ip, attempts, device, os, browser, userTimezone, ipDetail);
 		await this.emitWebhookEvent(c, 'auth.login.failed', message, EVENT_LEVEL.WARN, { email, ip, attempts, device, os, browser, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false });
+		await this.sendSecurityEventAlert(c, `Failed login: ${email || '-'}`, `IP: <code>${ip || '-'}</code> | Attempts: ${attempts || 0}`);
 	},
 
 	async sendQuotaWarningNotification(c, userInfo, quotaType) {
@@ -541,7 +544,8 @@ const telegramService = {
 				[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🌐 Whois', callback_data: 'cmd:whois:help' }],
 				[{ text: '📈 Stats', callback_data: 'cmd:stats:7d' }, { text: '🎟️ Invite', callback_data: 'cmd:invite:1' }],
 				[{ text: '🧭 System', callback_data: 'cmd:system' }, { text: '🗂 Events', callback_data: 'cmd:events:1' }],
-				[{ text: '🆔 Chat ID', callback_data: 'cmd:chatid' }, { text: '❓ Help', callback_data: 'cmd:help' }]
+				[{ text: '🔎 Searchs', callback_data: 'cmd:searchs' }, { text: '🆔 Chat ID', callback_data: 'cmd:chatid' }],
+				[{ text: '❓ Help', callback_data: 'cmd:help' }]
 			]
 		};
 	},
@@ -552,6 +556,103 @@ const telegramService = {
 		buttons.push({ text: `📄 ${page}`, callback_data: 'cmd:noop' });
 		if (hasNext) buttons.push({ text: 'Next ➡️', callback_data: `cmd:${command}:${page + 1}` });
 		return { inline_keyboard: [buttons, [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+	},
+
+	buildDetailMenu({ backText, backCallbackData, previewUrl }) {
+		const rows = [];
+		if (previewUrl) {
+			rows.push([{ text: '🔎 Open Email Preview', web_app: { url: previewUrl } }]);
+		}
+		rows.push([
+			{ text: backText || '⬅️ Back to List', callback_data: backCallbackData || 'cmd:menu' },
+			{ text: '🏠 Menu', callback_data: 'cmd:menu' }
+		]);
+		return { inline_keyboard: rows };
+	},
+
+
+	buildSearchMenu() {
+		return {
+			inline_keyboard: [
+				[{ text: '👤 User/Address', callback_data: 'cmd:searchhelp:user' }, { text: '📨 Email ID', callback_data: 'cmd:searchhelp:email' }],
+				[{ text: '🎟 Invite Code', callback_data: 'cmd:searchhelp:invite' }, { text: '🛡 Role', callback_data: 'cmd:searchhelp:role' }],
+				[{ text: '🌐 IP Lookup', callback_data: 'cmd:whois:help' }],
+				[{ text: '🏠 Menu', callback_data: 'cmd:menu' }]
+			]
+		};
+	},
+
+	async sendSecurityEventAlert(c, title, detail = '', callbackData = 'cmd:security') {
+		const allowed = await this.parseAllowedChatIds(c);
+		if (!allowed.length) return;
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken) return;
+		const text = `🚨 <b>Security Event</b>\n${title}${detail ? `\n${detail}` : ''}`;
+		const replyMarkup = { inline_keyboard: [[{ text: '🔐 Open Security', callback_data: callbackData }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		await Promise.all(allowed.map(async chatId => {
+			const payload = { chat_id: chatId, parse_mode: 'HTML', text, reply_markup: replyMarkup };
+			await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload)
+			});
+		}));
+	},
+
+	formatSearchHelp(scope = 'general') {
+		if (scope === 'user') {
+			return `🔎 <b>/search user</b>\nContoh:\n• <code>/search user 2</code>\n• <code>/search user abyn@abyn.xyz</code>\n• <code>/search user abyn@abyn.xyz/2</code>\n\nMenampilkan detail user/address + aktivitas terbaru di webhook_event_log.`;
+		}
+		if (scope === 'email') {
+			return `🔎 <b>/search email</b>\nContoh: <code>/search email 121</code>\nMenampilkan detail email sesuai email id.`;
+		}
+		if (scope === 'invite') {
+			return `🔎 <b>/search invite</b>\nContoh:\n• <code>/search invite 6</code>\n• <code>/search invite SLEfZUtS</code>`;
+		}
+		if (scope === 'role') {
+			return `🔎 <b>/search role</b>\nContoh:\n• <code>/search role 1</code>\n• <code>/search role normal users</code>`;
+		}
+		return `🔎 <b>/searchs</b>\nGunakan menu search atau command: \n• <code>/search user &lt;userId|email|email/userId&gt;</code>\n• <code>/search email &lt;emailId&gt;</code>\n• <code>/search invite &lt;inviteId|code&gt;</code>\n• <code>/search role &lt;roleId|name&gt;</code>\n• <code>/search ip &lt;ip&gt;</code> (setara <code>/whois</code>)`;
+	},
+
+	async queryRecentActivity(c, { userId = null, address = null, accountId = null, ip = null }, limit = 5) {
+		const conditions = [];
+		const params = [];
+		if (userId) {
+			conditions.push("COALESCE(json_extract(meta, '$.userId'), 0) = ?");
+			params.push(Number(userId));
+		}
+		if (address) {
+			conditions.push('(message LIKE ? OR meta LIKE ?)');
+			params.push(`%${address}%`, `%${address}%`);
+		}
+		if (accountId) {
+			conditions.push('(message LIKE ? OR meta LIKE ?)');
+			params.push(`%account_id ${accountId}%`, `%"accountId":${accountId}%`);
+		}
+		if (ip) {
+			conditions.push('(message LIKE ? OR COALESCE(json_extract(meta, "$.ip"), "") = ?)');
+			params.push(`%${ip}%`, ip);
+		}
+		if (!conditions.length) return [];
+		const sql = `
+			SELECT log_id as logId, event_type as eventType, level, message, create_time as createTime
+			FROM webhook_event_log
+			WHERE ${conditions.join(' OR ')}
+			ORDER BY log_id DESC
+			LIMIT ?
+		`;
+		const rows = await c.env.db.prepare(sql).bind(...params, limit).all();
+		return rows?.results || [];
+	},
+
+	formatActivityBlock(items = []) {
+		if (!items.length) return 'Aktivitas terbaru: -';
+		const lines = items.map(item => {
+			const oneLine = String(item.message || '').split('\n').find(Boolean) || '-';
+			return `• #${item.logId} [${item.level}] ${item.eventType} | ${item.createTime}\n  ${oneLine.slice(0, 140)}`;
+		});
+		return `Aktivitas terbaru:\n${lines.join('\n')}`;
 	},
 
 	parseRangeDays(rangeArg = '7d') {
@@ -612,7 +713,7 @@ Tip: tap Security Event button or use <code>/security event &lt;id&gt;</code>.` 
 	},
 
 	async formatSecurityEventDetailCommand(c, eventIdArg) {
-		return await this.formatEventDetailCommand(c, eventIdArg);
+		return await this.formatEventDetailCommand(c, eventIdArg, { fromSecurity: true });
 	},
 
 	async formatWhoisCommand(c, ipArg) {
@@ -628,6 +729,15 @@ Usage: <code>/whois 1.1.1.1</code>`,
 		const sec = detail?.security || {};
 		const loc = detail?.location || {};
 		const net = detail?.network || {};
+		const relatedUsersRows = await c.env.db.prepare(`
+			SELECT user_id as userId, email, type, status, active_ip as activeIp, create_ip as createIp
+			FROM user
+			WHERE is_del = 0 AND (active_ip = ? OR create_ip = ?)
+			ORDER BY user_id DESC
+			LIMIT 10
+		`).bind(ip, ip).all();
+		const relatedUsers = relatedUsersRows?.results || [];
+		const userLines = relatedUsers.map(item => `• #${item.userId} ${item.email} | role=${item.type} status=${item.status} | active=${item.activeIp || '-'} create=${item.createIp || '-'}`).join('\n');
 		return {
 			text: `🌐 <b>/whois</b>
 
@@ -635,7 +745,10 @@ IP: <code>${ip}</code>
 VPN/Proxy/Tor/Relay: ${sec.vpn ? 'Y' : 'N'}/${sec.proxy ? 'Y' : 'N'}/${sec.tor ? 'Y' : 'N'}/${sec.relay ? 'Y' : 'N'}
 Location: ${loc.city || '-'}, ${loc.region || '-'}, ${loc.country || '-'} (${loc.country_code || '-'})
 ASN Org: ${net.autonomous_system_organization || '-'}
-ASN: ${net.autonomous_system_number || '-'}`,
+ASN: ${net.autonomous_system_number || '-'}
+
+👥 <b>Accounts with this IP</b>
+${userLines || '-'}`,
 			replyMarkup: this.buildMainMenu()
 		};
 	},
@@ -698,7 +811,7 @@ No webhook event logs yet.`, replyMarkup: this.buildMainMenu() };
 				const truncated = lines.length > 3 ? '\n…' : '';
 				return `#${item.logId} [${item.level}] ${item.eventType}\n${preview}${truncated}\nAt: ${item.createTime}`;
 			}).join('\n\n');
-			const eventButtons = visible.map(item => [{ text: `🧾 #${item.logId} ${item.eventType}`, callback_data: `cmd:event:${item.logId}` }]);
+			const eventButtons = visible.map(item => [{ text: `🧾 #${item.logId} ${item.eventType}`, callback_data: `cmd:event:${item.logId}:${currentPage}` }]);
 			const pagerMarkup = this.buildPager('events', currentPage, hasNext);
 			const replyMarkup = {
 				inline_keyboard: [...eventButtons, ...(pagerMarkup?.inline_keyboard || [])]
@@ -714,11 +827,13 @@ Unable to query event log: ${e.message}`, replyMarkup: this.buildMainMenu() };
 		}
 	},
 
-	async formatEventDetailCommand(c, idArg) {
+	async formatEventDetailCommand(c, idArg, options = {}) {
 		const logId = Number(idArg || 0);
+		const fromSecurity = Boolean(options?.fromSecurity);
+		const backPage = Math.max(1, Number(options?.backPage || 1));
 		if (!logId) {
 			return { text: `🧾 <b>/event</b>
-Usage: <code>/event 123</code>`, replyMarkup: this.buildMainMenu() };
+Usage: <code>/event 123</code>`, replyMarkup: this.buildDetailMenu({ backText: '🗂 Events List', backCallbackData: 'cmd:events:1' }) };
 		}
 		const row = await c.env.db.prepare(`
 			SELECT log_id as logId, event_type as eventType, level, message, meta, create_time as createTime
@@ -727,7 +842,7 @@ Usage: <code>/event 123</code>`, replyMarkup: this.buildMainMenu() };
 		`).bind(logId).first();
 		if (!row) {
 			return { text: `🧾 <b>/event</b>
-Event #${logId} not found.`, replyMarkup: this.buildMainMenu() };
+Event #${logId} not found.`, replyMarkup: this.buildDetailMenu({ backText: fromSecurity ? '🔐 Security List' : '🗂 Events List', backCallbackData: fromSecurity ? 'cmd:security' : `cmd:events:${backPage}` }) };
 		}
 		let meta = {};
 		try { meta = row.meta ? JSON.parse(row.meta) : {}; } catch (_) {}
@@ -740,9 +855,11 @@ At: ${row.createTime}
 Message: ${row.message}
 
 Meta: <code>${JSON.stringify(meta || {}, null, 2).slice(0, 1200)}</code>`;
-		const replyMarkup = previewUrl
-			? { inline_keyboard: [[{ text: '🔎 Open Email Preview', web_app: { url: previewUrl } }], [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-			: this.buildMainMenu();
+		const replyMarkup = this.buildDetailMenu({
+			backText: fromSecurity ? '🔐 Security List' : '🗂 Events List',
+			backCallbackData: fromSecurity ? 'cmd:security' : `cmd:events:${backPage}`,
+			previewUrl
+		});
 		return { text: detail, replyMarkup };
 	},
 
@@ -768,7 +885,7 @@ From: <code>${item.sendEmail || '-'}</code>
 To: <code>${item.toEmail || '-'}</code>
 Subj: ${item.subject || '-'}
 At: ${item.createTime}`).join('\n\n');
-		const mailButtons = visibleRows.map(item => [{ text: `✉️ #${item.emailId} ${item.subject || '(no subject)'}`.slice(0, 64), callback_data: `cmd:mailid:${item.emailId}` }]);
+		const mailButtons = visibleRows.map(item => [{ text: `✉️ #${item.emailId} ${item.subject || '(no subject)'}`.slice(0, 64), callback_data: `cmd:mailid:${item.emailId}:${currentPage}` }]);
 		const pagerMarkup = this.buildPager('mail', currentPage, hasNext);
 		const replyMarkup = {
 			inline_keyboard: [...mailButtons, ...(pagerMarkup?.inline_keyboard || [])]
@@ -780,10 +897,11 @@ ${body}
 Tip: tap mail buttons below or use <code>/mail &lt;emailId&gt;</code> for detail + preview.`, replyMarkup };
 	},
 
-	async formatMailDetailCommand(c, emailIdArg) {
+	async formatMailDetailCommand(c, emailIdArg, pageArg = 1) {
 		const emailId = Number(emailIdArg || 0);
+		const backPage = Math.max(1, Number(pageArg || 1));
 		if (!emailId) {
-			return { text: `📨 <b>/mail</b>\nUsage: <code>/mail 120</code> (detail) or <code>/mail 1</code> (page).`, replyMarkup: this.buildMainMenu() };
+			return { text: `📨 <b>/mail</b>\nUsage: <code>/mail 120</code> (detail) or <code>/mail 1</code> (page).`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: 'cmd:mail:1' }) };
 		}
 		const row = await orm(c).select({
 			emailId: email.emailId,
@@ -796,7 +914,7 @@ Tip: tap mail buttons below or use <code>/mail &lt;emailId&gt;</code> for detail
 			userId: email.userId
 		}).from(email).where(eq(email.emailId, emailId)).get();
 		if (!row) {
-			return { text: `📨 <b>/mail</b>\nEmail #${emailId} not found.`, replyMarkup: this.buildMainMenu() };
+			return { text: `📨 <b>/mail</b>\nEmail #${emailId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: `cmd:mail:${backPage}` }) };
 		}
 		const { customDomain } = await settingService.query(c);
 		const jwtToken = await jwtUtils.generateToken(c, { emailId: row.emailId });
@@ -822,9 +940,7 @@ Message: ${row.type === 0 ? '📥 Email Received' : '📤 Email Sent'}
 💬 Preview: ${(row.text || '').slice(0, 120) || '-'}
 
 Meta: <code>${JSON.stringify(meta, null, 2)}</code>`;
-		const replyMarkup = webAppUrl
-			? { inline_keyboard: [[{ text: '🔎 Open Email Preview', web_app: { url: webAppUrl } }], [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
-			: this.buildMainMenu();
+		const replyMarkup = this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: `cmd:mail:${backPage}`, previewUrl: webAppUrl });
 		return { text: detail, replyMarkup };
 	},
 
@@ -917,15 +1033,47 @@ ${body}`;
 No invite code data.`, replyMarkup: this.buildMainMenu() };
 		const hasNext = rows.length > pageSize;
 		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
-		const roleRows = await orm(c).select().from(role);
-		const map = new Map(roleRows.map(r => [r.roleId, r.name]));
-		const body = visibleRows.map(item => `🆔 <code>${item.regKeyId}</code> <code>${item.code}</code>
-Role: ${map.get(item.roleId) || item.roleId}
-Remaining: ${item.count} | Expire: ${item.expireTime || '-'}
-Created: ${item.createTime || '-'}`).join('\n\n');
+		const body = visibleRows.map(item => `🆔 <code>${item.regKeyId}</code> <code>${item.code}</code>`).join('\n');
+		const inviteButtons = visibleRows.map(item => [{ text: `🎟️ Detail #${item.regKeyId} ${item.code}`.slice(0, 64), callback_data: `cmd:inviteid:${item.regKeyId}:${currentPage}` }]);
+		const pagerMarkup = this.buildPager('invite', currentPage, hasNext);
+		const replyMarkup = { inline_keyboard: [...inviteButtons, ...(pagerMarkup?.inline_keyboard || [])] };
 		return { text: `🎟️ <b>/invite</b> (page ${currentPage})
 
-${body}`, replyMarkup: this.buildPager('invite', currentPage, hasNext) };
+${body}`, replyMarkup };
+	},
+
+	async formatInviteDetailCommand(c, inviteIdArg, pageArg = 1) {
+		const inviteId = Number(inviteIdArg || 0);
+		const backPage = Math.max(1, Number(pageArg || 1));
+		if (!inviteId) {
+			return { text: `🎟️ <b>/invite</b>\nUsage: <code>/invite 6</code>`, replyMarkup: this.buildDetailMenu({ backText: '🎟 Invite List', backCallbackData: 'cmd:invite:1' }) };
+		}
+		const item = await orm(c).select({
+			regKeyId: regKey.regKeyId,
+			code: regKey.code,
+			count: regKey.count,
+			roleId: regKey.roleId,
+			userId: regKey.userId,
+			expireTime: regKey.expireTime,
+			createTime: regKey.createTime,
+		}).from(regKey).where(eq(regKey.regKeyId, inviteId)).get();
+		if (!item) {
+			return { text: `🎟️ <b>/invite</b>\nInvite #${inviteId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '🎟 Invite List', backCallbackData: `cmd:invite:${backPage}` }) };
+		}
+		const roleInfo = await orm(c).select({ roleId: role.roleId, name: role.name }).from(role).where(eq(role.roleId, item.roleId)).get();
+		let usedBy = '-';
+		if (item.userId && Number(item.userId) > 0) {
+			const usedUser = await orm(c).select({ userId: user.userId, email: user.email, createTime: user.createTime }).from(user).where(eq(user.userId, item.userId)).get();
+			usedBy = usedUser ? `#${usedUser.userId} ${usedUser.email} (created: ${usedUser.createTime || '-'})` : `user_id ${item.userId}`;
+		}
+		const text = `🎟️ <b>/invite (page ${backPage})</b>
+
+🆔 ${item.regKeyId} ${item.code}
+Role: ${roleInfo?.name || item.roleId}
+Remaining: ${item.count} | Expire: ${item.expireTime || '-'}
+Created: ${item.createTime || '-'}
+Used by: ${usedBy}`;
+		return { text, replyMarkup: this.buildDetailMenu({ backText: '🎟 Invite List', backCallbackData: `cmd:invite:${backPage}` }) };
 	},
 
 	async formatStatusCommand(c) {
@@ -961,9 +1109,11 @@ Send Emails: ${numberCount.sendTotal}
 			const pending = webhookInfo?.result?.pending_update_count ?? '-';
 			const lastError = webhookInfo?.result?.last_error_message || '-';
 			const pushMode = await this.shouldSendWebhookPush(c) ? 'Push + Log' : 'Log only (default, no spam)';
-			const logs = (recentSystemLogs?.results || []).map((row, index) =>
-				`${index + 1}. [${row.createTime || '-'}] [${row.level || '-'}] ${row.eventType}: ${row.message}`
-			).join('\n');
+			const logs = (recentSystemLogs?.results || []).map((row, index) => {
+				const firstLine = String(row.message || '').split('\n').find(Boolean) || '-';
+				const shortLine = firstLine.length > 180 ? `${firstLine.slice(0, 177)}...` : firstLine;
+				return `${index + 1}. [${row.createTime || '-'}] [${row.level || '-'}] ${row.eventType}: ${shortLine}`;
+			}).join('\n');
 		return `🧭 <b>/system</b>
 
 IP Cache Rows: ${cacheCount?.total || 0}
@@ -981,8 +1131,89 @@ ${logs || 'No logs yet.'}`;
 		}
 	},
 
+
+
+	async formatSearchsCommand(c) {
+		return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
+	},
+
+	async formatSearchCommand(c, typeArg, queryArgs = []) {
+		const type = String(typeArg || '').toLowerCase();
+		const query = String((queryArgs || []).join(' ').trim());
+		if (!type) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
+		if (type === 'ip') return await this.formatWhoisCommand(c, query);
+		if (type === 'email') {
+			const emailId = String(query || '').replace(/email\s*id/gi, '').trim();
+			return await this.formatMailDetailCommand(c, emailId, 1);
+		}
+		if (type === 'invite') {
+			if (!query) return { text: this.formatSearchHelp('invite'), replyMarkup: this.buildSearchMenu() };
+			let row = null;
+			if (/^\d+$/.test(query)) row = await orm(c).select({ regKeyId: regKey.regKeyId }).from(regKey).where(eq(regKey.regKeyId, Number(query))).get();
+			if (!row) {
+				const byCode = await c.env.db.prepare('SELECT rege_key_id as regKeyId FROM reg_key WHERE code = ? LIMIT 1').bind(query).first();
+				if (byCode) row = byCode;
+			}
+			if (!row?.regKeyId) return { text: `🔎 <b>/search invite</b>\nInvite tidak ditemukan untuk: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
+			return await this.formatInviteDetailCommand(c, row.regKeyId, 1);
+		}
+		if (type === 'role') {
+			if (!query) return { text: this.formatSearchHelp('role'), replyMarkup: this.buildSearchMenu() };
+			let roleRow = null;
+			if (/^\d+$/.test(query)) roleRow = await orm(c).select().from(role).where(eq(role.roleId, Number(query))).get();
+			if (!roleRow) {
+				const roleRows = await c.env.db.prepare('SELECT role_id as roleId FROM role WHERE LOWER(name) = LOWER(?) LIMIT 1').bind(query).all();
+				if (roleRows?.results?.[0]?.roleId !== undefined) roleRow = await orm(c).select().from(role).where(eq(role.roleId, roleRows.results[0].roleId)).get();
+			}
+			if (!roleRow) return { text: `🔎 <b>/search role</b>\nRole tidak ditemukan: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
+			const roleInfo = await this.attachRolePermInfo(c, { ...roleRow });
+			const sendDisplay = !roleInfo.canSendEmail
+				? 'Unauthorized'
+				: ((roleInfo.sendCount || 0) === 0 ? 'Unlimited' : `${roleInfo.sendType || '-'} / ${roleInfo.sendCount ?? '-'}`);
+			const addressDisplay = !roleInfo.canAddAddress
+				? 'Unauthorized'
+				: ((roleInfo.accountCount || 0) === 0 ? 'Unlimited' : `${roleInfo.accountCount ?? '-'}`);
+			return {
+				text: `🔎 <b>Search Result: Role</b>\n\n🆔 <code>${roleInfo.roleId}</code> ${roleInfo.name}\nSend: ${sendDisplay}\nAddress limit: ${addressDisplay}`,
+				replyMarkup: this.buildSearchMenu()
+			};
+		}
+		if (type === 'user' || type === 'account' || type === 'address') {
+			if (!query) return { text: this.formatSearchHelp('user'), replyMarkup: this.buildSearchMenu() };
+			const [addressPartRaw, accountPartRaw] = query.split('/');
+			const addressPart = String(addressPartRaw || '').trim();
+			const accountPart = String(accountPartRaw || '').replace(/akun\s*id/gi, '').trim();
+			let matchedUser = null;
+			let matchedAccount = null;
+			if (/^\d+$/.test(addressPart)) {
+				matchedUser = await orm(c).select().from(user).where(eq(user.userId, Number(addressPart))).get();
+				if (!matchedUser) {
+					matchedAccount = await orm(c).select({ accountId: account.accountId, email: account.email, userId: account.userId }).from(account).where(eq(account.accountId, Number(addressPart))).get();
+				}
+			} else if (addressPart) {
+				const userRows = await c.env.db.prepare('SELECT user_id as userId FROM user WHERE LOWER(email) = LOWER(?) LIMIT 1').bind(addressPart).all();
+				if (userRows?.results?.[0]?.userId) matchedUser = await orm(c).select().from(user).where(eq(user.userId, userRows.results[0].userId)).get();
+				if (!matchedUser) {
+					const accountRows = await c.env.db.prepare('SELECT account_id as accountId, user_id as userId, email FROM account WHERE LOWER(email) = LOWER(?) AND is_del = 0 LIMIT 1').bind(addressPart).all();
+					if (accountRows?.results?.[0]) matchedAccount = accountRows.results[0];
+				}
+			}
+			if (accountPart && /^\d+$/.test(accountPart)) {
+				matchedAccount = await orm(c).select({ accountId: account.accountId, email: account.email, userId: account.userId }).from(account).where(eq(account.accountId, Number(accountPart))).get();
+			}
+			if (!matchedUser && matchedAccount?.userId) matchedUser = await orm(c).select().from(user).where(eq(user.userId, matchedAccount.userId)).get();
+			if (!matchedUser) return { text: `🔎 <b>/search user</b>\nData tidak ditemukan untuk: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
+			const recent = await this.queryRecentActivity(c, { userId: matchedUser.userId, address: matchedUser.email, accountId: matchedAccount?.accountId || null, ip: matchedUser.activeIp }, 5);
+			const detail = `🔎 <b>Search Result: User</b>\n\nUser: #${matchedUser.userId} ${matchedUser.email}\nStatus: ${matchedUser.status} | Role ID: ${matchedUser.type}\nActive IP: <code>${matchedUser.activeIp || '-'}</code>\nAddress Match: ${matchedAccount ? `${matchedAccount.email} (account_id ${matchedAccount.accountId})` : '-'}\n\n${this.formatActivityBlock(recent)}`;
+			return { text: detail, replyMarkup: this.buildSearchMenu() };
+		}
+		return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
+	},
 	async resolveCommand(c, command, args, chatId, userId) {
 		const pageArg = Number(args?.[0] || 1);
+		if (command === '/searchs' && args?.[0]) {
+			return { text: this.formatSearchHelp(args[0]), replyMarkup: this.buildSearchMenu() };
+		}
 		switch (command) {
 			case '/start':
 			case '/help':
@@ -1002,6 +1233,8 @@ Use buttons below or type commands manually:
 🗂 <b>/events [page]</b> — browse webhook/system event log
 🧾 <b>/event &lt;id&gt;</b> — open one event detail + preview link
 🎟️ <b>/invite [page]</b> — invitation codes
+🔎 <b>/searchs</b> — quick search menu
+🔎 <b>/search ...</b> — search user/email/invite/role/ip
 🆔 <b>/chatid</b> — your current chat_id/user_id
 
 <b>Examples:</b>
@@ -1009,7 +1242,9 @@ Use buttons below or type commands manually:
 • <code>/whois 1.1.1.1</code>
 • <code>/stats 3d</code>
 • <code>/events 1</code>
-• <code>/event 42</code>`,
+• <code>/event 42</code>
+• <code>/search user abyn@abyn.xyz/akun id 2</code>
+• <code>/search email 121</code>`,
 					replyMarkup: this.buildMainMenu()
 				};
 			case '/mail':
@@ -1020,7 +1255,7 @@ Use buttons below or type commands manually:
 					return await this.formatMailCommand(c, Number(args[0]));
 				}
 				if (args?.[0]) {
-					return await this.formatMailDetailCommand(c, args[0]);
+					return await this.formatMailDetailCommand(c, args[0], args?.[1]);
 				}
 				return await this.formatMailCommand(c, pageArg);
 			case '/users':
@@ -1028,6 +1263,12 @@ Use buttons below or type commands manually:
 			case '/role':
 				return { text: await this.formatRoleCommand(c), replyMarkup: this.buildMainMenu() };
 			case '/invite':
+				if (args?.[0] === 'detail') {
+					return await this.formatInviteDetailCommand(c, args?.[1], args?.[2]);
+				}
+				if (args?.[0] && /^\d+$/.test(String(args[0])) && Number(args[0]) > 50) {
+					return await this.formatInviteDetailCommand(c, args[0], 1);
+				}
 				return await this.formatInviteCommand(c, pageArg);
 			case '/status':
 				return { text: await this.formatStatusCommand(c), replyMarkup: this.buildMainMenu() };
@@ -1053,7 +1294,11 @@ Use buttons below or type commands manually:
 				}
 				return await this.formatEventsCommand(c, pageArg);
 			case '/event':
-				return await this.formatEventDetailCommand(c, args?.[0]);
+				return await this.formatEventDetailCommand(c, args?.[0], { backPage: args?.[1] });
+			case '/searchs':
+				return await this.formatSearchsCommand(c);
+			case '/search':
+				return await this.formatSearchCommand(c, args?.[0], args?.slice(1));
 			default:
 				return await this.resolveCommand(c, '/help', [], chatId, userId);
 		}
@@ -1085,18 +1330,34 @@ Use buttons below or type commands manually:
 				} else {
 					args = [pagingMatch[2]];
 				}
+			} else if (/^cmd:inviteid:(\d+):(\d+)$/.test(callback.data)) {
+				const inviteDetailMatch = /^cmd:inviteid:(\d+):(\d+)$/.exec(callback.data);
+				command = '/invite';
+				args = ['detail', inviteDetailMatch[1], inviteDetailMatch[2]];
+			} else if (/^cmd:searchhelp:(user|email|invite|role)$/.test(callback.data)) {
+				const searchHelpMatch = /^cmd:searchhelp:(user|email|invite|role)$/.exec(callback.data);
+				command = '/searchs';
+				args = [searchHelpMatch[1]];
+			} else if (/^cmd:mailid:(\d+):(\d+)$/.test(callback.data)) {
+				const mailDetailMatch = /^cmd:mailid:(\d+):(\d+)$/.exec(callback.data);
+				command = '/mail';
+				args = [mailDetailMatch[1], mailDetailMatch[2]];
 			} else if (/^cmd:mailid:(\d+)$/.test(callback.data)) {
 				const mailDetailMatch = /^cmd:mailid:(\d+)$/.exec(callback.data);
 				command = '/mail';
-				args = [mailDetailMatch[1]];
+				args = [mailDetailMatch[1], '1'];
 			} else if (/^cmd:securityevent:(\d+)$/.test(callback.data)) {
 				const securityEventDetailMatch = /^cmd:securityevent:(\d+)$/.exec(callback.data);
 				command = '/security';
 				args = ['event', securityEventDetailMatch[1]];
+			} else if (/^cmd:event:(\d+):(\d+)$/.test(callback.data)) {
+				const eventDetailMatch = /^cmd:event:(\d+):(\d+)$/.exec(callback.data);
+				command = '/event';
+				args = [eventDetailMatch[1], eventDetailMatch[2]];
 			} else if (/^cmd:event:(\d+)$/.test(callback.data)) {
 				const eventDetailMatch = /^cmd:event:(\d+)$/.exec(callback.data);
 				command = '/event';
-				args = [eventDetailMatch[1]];
+				args = [eventDetailMatch[1], '1'];
 			} else if (callback.data === 'cmd:stats:7d') {
 				command = '/stats';
 				args = ['7d'];
@@ -1104,7 +1365,7 @@ Use buttons below or type commands manually:
 				command = '/whois';
 				args = ['help'];
 			} else {
-				const single = /^cmd:(status|role|chatid|system|security)$/.exec(callback.data);
+				const single = /^cmd:(status|role|chatid|system|security|searchs)$/.exec(callback.data);
 				if (single) command = `/${single[1]}`;
 			}
 			const result = await this.resolveCommand(c, command, args, chatId, userId);
