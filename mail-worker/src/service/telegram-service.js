@@ -110,7 +110,7 @@ const telegramService = {
 
 	async logSystemEvent(c, eventType, level, message, meta = null) {
 		try {
-			const safeMessage = String(message || '').slice(0, 512);
+			const safeMessage = String(message || '').slice(0, 3800);
 			const metaJson = meta ? JSON.stringify(meta).slice(0, 2000) : null;
 			await c.env.db.prepare(`
 				INSERT INTO webhook_event_log (event_type, level, message, meta)
@@ -119,6 +119,11 @@ const telegramService = {
 		} catch (e) {
 			console.error('Failed to write webhook_event_log:', e.message);
 		}
+	},
+
+	async emitWebhookEvent(c, eventType, message, level = EVENT_LEVEL.INFO, meta = null, replyMarkup = null) {
+		await this.logSystemEvent(c, eventType, level, message, meta);
+		await this.sendTelegramMessage(c, message, replyMarkup);
 	},
 
 
@@ -221,8 +226,7 @@ const telegramService = {
 		const jwtToken = await jwtUtils.generateToken(c, { emailId: emailData.emailId });
 		const webAppUrl = customDomain ? `${domainUtils.toOssDomain(customDomain)}/api/telegram/getEmail/${jwtToken}` : 'https://www.cloudflare.com/404';
 		const message = emailMsgTemplate(emailData, tgMsgTo, tgMsgFrom, tgMsgText, null);
-		await this.logSystemEvent(c, 'email.received', EVENT_LEVEL.INFO, `Email received for ${emailData?.toEmail || '-'}`, { emailId: emailData?.emailId, webAppUrl, from: emailData?.sendEmail, to: emailData?.toEmail });
-		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
+		await this.emitWebhookEvent(c, 'email.received', message, EVENT_LEVEL.INFO, { emailId: emailData?.emailId, webAppUrl, from: emailData?.sendEmail, to: emailData?.toEmail }, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
 	},
 
 	async sendIpSecurityNotification(c, userInfo) {
@@ -231,7 +235,7 @@ const telegramService = {
 		const ipDetail = await this.queryIpSecurity(c, userInfo.activeIp);
 		await this.logSystemEvent(c, 'security.ip_changed', EVENT_LEVEL.WARN, `Recent IP updated for ${userInfo?.email || '-'}`, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false, relay: ipDetail?.security?.relay || false });
 		const message = ipSecurityMsgTemplate(userInfo, ipDetail);
-		await this.sendTelegramMessage(c, message);
+		await this.emitWebhookEvent(c, 'security.ip_changed', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false, relay: ipDetail?.security?.relay || false });
 	},
 
 	async sendRegKeyManageNotification(c, action, regKeyInfo, actorInfo, extraInfo = {}) {
@@ -242,7 +246,7 @@ const telegramService = {
 		regKeyInfo.roleInfo = await this.attachRolePermInfo(c, regKeyInfo.roleInfo);
 		if (actorInfo?.role) actorInfo.role = await this.attachRolePermInfo(c, actorInfo.role);
 		const message = regKeyManageMsgTemplate(action, regKeyInfo, actorInfo, extraInfo);
-		await this.sendTelegramMessage(c, message);
+		await this.emitWebhookEvent(c, 'regkey.manage', message, EVENT_LEVEL.INFO, { action, code: regKeyInfo?.code, actor: actorInfo?.email || '-' });
 	},
 
 	async sendLoginNotification(c, userInfo) {
@@ -262,8 +266,7 @@ const telegramService = {
 			});
 		}
 
-		await this.logSystemEvent(c, 'auth.login.success', EVENT_LEVEL.INFO, `Login success: ${userInfo?.email || '-'}`, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp });
-		await this.sendTelegramMessage(c, message);
+		await this.emitWebhookEvent(c, 'auth.login.success', message, EVENT_LEVEL.INFO, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp });
 	},
 
 	async sendRegisterNotification(c, userInfo, accountCount, roleInfo = null) {
@@ -271,7 +274,7 @@ const telegramService = {
 		await this.setIpDetailContext(c, userInfo, 'createIp');
 		roleInfo = await this.attachRolePermInfo(c, roleInfo);
 		const message = registerMsgTemplate(userInfo, accountCount, roleInfo);
-		await this.sendTelegramMessage(c, message);
+		await this.emitWebhookEvent(c, 'auth.register', message, EVENT_LEVEL.INFO, { userId: userInfo?.userId, email: userInfo?.email });
 	},
 
 	async sendAdminCreateUserNotification(c, newUserInfo, roleInfo, adminUser) {
@@ -281,7 +284,7 @@ const telegramService = {
 		roleInfo = await this.attachRolePermInfo(c, roleInfo);
 		adminUser.role = await this.attachRolePermInfo(c, adminUser.role);
 		const message = adminCreateUserMsgTemplate(newUserInfo, roleInfo, adminUser);
-		await this.sendTelegramMessage(c, message);
+		await this.emitWebhookEvent(c, 'admin.user.create', message, EVENT_LEVEL.INFO, { userId: newUserInfo?.userId, email: newUserInfo?.email, admin: adminUser?.email || '-' });
 	},
 
 	async sendEmailSentNotification(c, emailInfo, userInfo) {
@@ -292,36 +295,39 @@ const telegramService = {
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		const message = sendEmailMsgTemplate(emailInfo, userInfo);
-		await this.logSystemEvent(c, 'email.sent', EVENT_LEVEL.INFO, `Email sent by ${userInfo?.email || '-'}`, { emailId: emailInfo?.emailId, userId: userInfo?.userId, from: emailInfo?.sendEmail, to: emailInfo?.toEmail, webAppUrl });
-		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
+		await this.emitWebhookEvent(c, 'email.sent', message, EVENT_LEVEL.INFO, { emailId: emailInfo?.emailId, userId: userInfo?.userId, from: emailInfo?.sendEmail, to: emailInfo?.toEmail, webAppUrl }, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
 	},
 
 	async sendEmailSoftDeleteNotification(c, emailIds, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		await this.sendTelegramMessage(c, softDeleteEmailMsgTemplate(emailIds, userInfo));
+		const message = softDeleteEmailMsgTemplate(emailIds, userInfo);
+		await this.emitWebhookEvent(c, 'email.delete.soft', message, EVENT_LEVEL.INFO, { emailIds, userId: userInfo?.userId });
 	},
 
 	async sendEmailHardDeleteNotification(c, emailIds, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		await this.sendTelegramMessage(c, hardDeleteEmailMsgTemplate(emailIds, userInfo));
+		const message = hardDeleteEmailMsgTemplate(emailIds, userInfo);
+		await this.emitWebhookEvent(c, 'email.delete.hard', message, EVENT_LEVEL.WARN, { emailIds, userId: userInfo?.userId });
 	},
 
 	async sendAddAddressNotification(c, addressInfo, userInfo, totalAddresses) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		await this.sendTelegramMessage(c, addAddressMsgTemplate(addressInfo, userInfo, totalAddresses));
+		const message = addAddressMsgTemplate(addressInfo, userInfo, totalAddresses);
+		await this.emitWebhookEvent(c, 'account.address.add', message, EVENT_LEVEL.INFO, { email: addressInfo?.email, userId: userInfo?.userId });
 	},
 
 	async sendDeleteAddressNotification(c, addressEmail, userInfo, remainingAddresses) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		await this.sendTelegramMessage(c, deleteAddressMsgTemplate(addressEmail, userInfo, remainingAddresses));
+		const message = deleteAddressMsgTemplate(addressEmail, userInfo, remainingAddresses);
+		await this.emitWebhookEvent(c, 'account.address.delete', message, EVENT_LEVEL.WARN, { email: addressEmail, userId: userInfo?.userId });
 	},
 
 	async sendRoleChangeNotification(c, userInfo, oldRole, newRole, changedBy) {
@@ -332,7 +338,8 @@ const telegramService = {
 		changedBy.role = await this.attachRolePermInfo(c, changedBy.role);
 		oldRole = await this.attachRolePermInfo(c, oldRole);
 		newRole = await this.attachRolePermInfo(c, newRole);
-		await this.sendTelegramMessage(c, roleChangeMsgTemplate(userInfo, oldRole, newRole, changedBy));
+		const message = roleChangeMsgTemplate(userInfo, oldRole, newRole, changedBy);
+		await this.emitWebhookEvent(c, 'admin.user.role_change', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, from: oldRole?.name, to: newRole?.name, by: changedBy?.email || '-' });
 	},
 
 	async sendUserStatusChangeNotification(c, userInfo, oldStatus, newStatus, changedBy) {
@@ -341,21 +348,24 @@ const telegramService = {
 		await this.setIpDetailContext(c, changedBy);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		changedBy.role = await this.attachRolePermInfo(c, changedBy.role);
-		await this.sendTelegramMessage(c, userStatusChangeMsgTemplate(userInfo, oldStatus, newStatus, changedBy));
+		const message = userStatusChangeMsgTemplate(userInfo, oldStatus, newStatus, changedBy);
+		await this.emitWebhookEvent(c, 'admin.user.status_change', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, oldStatus, newStatus, by: changedBy?.email || '-' });
 	},
 
 	async sendPasswordResetNotification(c, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		await this.sendTelegramMessage(c, passwordResetMsgTemplate(userInfo));
+		const message = passwordResetMsgTemplate(userInfo);
+		await this.emitWebhookEvent(c, 'auth.password.reset', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email });
 	},
 
 	async sendUserSelfDeleteNotification(c, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		await this.sendTelegramMessage(c, userSelfDeleteMsgTemplate(userInfo));
+		const message = userSelfDeleteMsgTemplate(userInfo);
+		await this.emitWebhookEvent(c, 'user.self_delete', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email });
 	},
 
 	async sendAdminDeleteUserNotification(c, deletedUser, adminUser) {
@@ -364,7 +374,8 @@ const telegramService = {
 		await this.setIpDetailContext(c, adminUser);
 		deletedUser.role = await this.attachRolePermInfo(c, deletedUser.role);
 		adminUser.role = await this.attachRolePermInfo(c, adminUser.role);
-		await this.sendTelegramMessage(c, adminDeleteUserMsgTemplate(deletedUser, adminUser));
+		const message = adminDeleteUserMsgTemplate(deletedUser, adminUser);
+		await this.emitWebhookEvent(c, 'admin.user.delete', message, EVENT_LEVEL.WARN, { deletedUserId: deletedUser?.userId, admin: adminUser?.email || '-' });
 	},
 
 
@@ -378,19 +389,21 @@ const telegramService = {
 			roleInfo = await this.attachRolePermInfo(c, roleRow || roleInfo);
 		}
 
-		await this.sendTelegramMessage(c, roleManageMsgTemplate(action, roleInfo, actorInfo, extra));
+		const message = roleManageMsgTemplate(action, roleInfo, actorInfo, extra);
+		await this.emitWebhookEvent(c, 'admin.role.manage', message, EVENT_LEVEL.INFO, { action, roleId: roleInfo?.roleId, actor: actorInfo?.email || '-' });
 	},
 
 	async sendFailedLoginNotification(c, email, ip, attempts, device, os, browser) {
 		const userTimezone = await timezoneUtils.getTimezone(c, ip);
 		const ipDetail = await this.queryIpSecurity(c, ip);
-		await this.logSystemEvent(c, 'auth.login.failed', EVENT_LEVEL.WARN, `Failed login: ${email || '-'}`, { email, ip, attempts, device, os, browser, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false });
-		await this.sendTelegramMessage(c, failedLoginMsgTemplate(email, ip, attempts, device, os, browser, userTimezone, ipDetail));
+		const message = failedLoginMsgTemplate(email, ip, attempts, device, os, browser, userTimezone, ipDetail);
+		await this.emitWebhookEvent(c, 'auth.login.failed', message, EVENT_LEVEL.WARN, { email, ip, attempts, device, os, browser, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false });
 	},
 
 	async sendQuotaWarningNotification(c, userInfo, quotaType) {
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
-		await this.sendTelegramMessage(c, quotaWarningMsgTemplate(userInfo, quotaType));
+		const message = quotaWarningMsgTemplate(userInfo, quotaType);
+		await this.emitWebhookEvent(c, 'quota.warning', message, EVENT_LEVEL.WARN, { userId: userInfo?.userId, email: userInfo?.email, quotaType });
 	},
 
 	async parseAllowedChatIds(c) {
@@ -651,11 +664,16 @@ No webhook event logs yet.`, replyMarkup: this.buildMainMenu() };
 			const body = visible.map(item => `#${item.logId} [${item.level}] ${item.eventType}
 ${item.message}
 At: ${item.createTime}`).join('\n\n');
+			const eventButtons = visible.map(item => [{ text: `🧾 #${item.logId} ${item.eventType}`, callback_data: `cmd:event:${item.logId}` }]);
+			const pagerMarkup = this.buildPager('events', currentPage, hasNext);
+			const replyMarkup = {
+				inline_keyboard: [...eventButtons, ...(pagerMarkup?.inline_keyboard || [])]
+			};
 			return { text: `🗂 <b>/events</b> (page ${currentPage})
 
 ${body}
 
-Tip: use <code>/event &lt;id&gt;</code> for full detail + preview link.`, replyMarkup: this.buildPager('events', currentPage, hasNext) };
+Tip: tap event buttons below or use <code>/event &lt;id&gt;</code> for full detail + preview link.`, replyMarkup };
 		} catch (e) {
 			return { text: `🗂 <b>/events</b>
 Unable to query event log: ${e.message}`, replyMarkup: this.buildMainMenu() };
@@ -948,6 +966,10 @@ Use buttons below or type commands manually:
 			if (pagingMatch) {
 				command = `/${pagingMatch[1]}`;
 				args = [pagingMatch[2]];
+			} else if (/^cmd:event:(\d+)$/.test(callback.data)) {
+				const eventDetailMatch = /^cmd:event:(\d+)$/.exec(callback.data);
+				command = '/event';
+				args = [eventDetailMatch[1]];
 			} else if (callback.data === 'cmd:stats:7d') {
 				command = '/stats';
 				args = ['7d'];
