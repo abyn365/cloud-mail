@@ -52,20 +52,66 @@ export async function email(message, env, ctx) {
 				WHERE lower(email) = ? OR lower(email) = ?
 				LIMIT 1
 			`).bind(senderEmail, senderDomain).first();
+
 			if (blacklisted) {
 				message.setReject('Sender is blacklisted');
-				// Log silently to security board (no notification to user)
+
+				// Silently save blocked email to ban_email_log for admin preview
+				// Records auto-deleted after 24h to save storage
 				try {
+					await env.db.prepare(`
+						CREATE TABLE IF NOT EXISTS ban_email_log (
+							id INTEGER PRIMARY KEY AUTOINCREMENT,
+							sender_email TEXT,
+							to_email TEXT,
+							matched_rule TEXT,
+							subject TEXT,
+							text_preview TEXT,
+							html_content TEXT,
+							create_time TEXT DEFAULT (datetime('now'))
+						)
+					`).run();
+
+					const textPreview = (email?.text || '').slice(0, 500);
+					const htmlContent = (email?.html || '').slice(0, 65000);
+
+					await env.db.batch([
+						env.db.prepare(`
+							INSERT INTO ban_email_log (sender_email, to_email, matched_rule, subject, text_preview, html_content, create_time)
+							VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+						`).bind(
+							senderEmail,
+							message.to || '',
+							blacklisted.email || '',
+							email?.subject || '',
+							textPreview,
+							htmlContent
+						),
+						env.db.prepare(`
+							DELETE FROM ban_email_log
+							WHERE create_time <= datetime('now', '-24 hour')
+						`)
+					]);
+
+					const lastRow = await env.db.prepare(`
+						SELECT id FROM ban_email_log
+						WHERE sender_email = ? AND to_email = ?
+						ORDER BY id DESC LIMIT 1
+					`).bind(senderEmail, message.to || '').first();
+
+					const banLogId = lastRow?.id || null;
+
 					await telegramService.logSystemEvent(
 						{ env },
 						'security.blacklist.blocked',
 						'warn',
-						`🚫 Blacklisted sender blocked\nFrom: ${senderEmail}\nTo: ${message.to}\nMatched rule: ${blacklisted.email}`,
-						{ senderEmail, to: message.to, matchedRule: blacklisted.email }
+						`🚫 Blacklisted sender blocked\nFrom: ${senderEmail}\nTo: ${message.to}\nMatched rule: ${blacklisted.email}\nSubject: ${email?.subject || '-'}`,
+						{ senderEmail, to: message.to, matchedRule: blacklisted.email, subject: email?.subject || '', banLogId }
 					);
 				} catch (e) {
 					console.error('Failed to log blacklist block event:', e);
 				}
+
 				return;
 			}
 		} catch (e) {
