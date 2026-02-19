@@ -20,6 +20,7 @@ import {computed, onBeforeUnmount, onMounted, watch} from "vue";
 import { useRoute } from 'vue-router'
 import { hasPerm } from "@/perm/perm.js"
 import { sanitizeHtml } from '@/utils/html-sanitize.js'
+import {EmailUnreadEnum} from "@/enums/email-enum.js";
 
 const settingStore = useSettingStore()
 const accountStore = useAccountStore()
@@ -166,6 +167,11 @@ async function startGlobalNotifyLoop() {
       continue
     }
 
+    if (!latestNotifyEmailId) {
+      await syncNotifyBaseline()
+      continue
+    }
+
     try {
       const list = await emailLatest(latestNotifyEmailId, accountId, allReceive)
       if (list.length === 0) {
@@ -176,7 +182,9 @@ async function startGlobalNotifyLoop() {
 
       for (const email of sortedList) {
         if (email.emailId > latestNotifyEmailId) {
-          await sendBrowserNotification(email)
+          if (email.unread === EmailUnreadEnum.UNREAD) {
+            await sendBrowserNotification(email)
+          }
           latestNotifyEmailId = email.emailId
         }
       }
@@ -185,6 +193,13 @@ async function startGlobalNotifyLoop() {
     }
   }
 }
+
+watch(() => accountStore.currentAccountId, async (newId, oldId) => {
+  if (newId && newId !== oldId) {
+    latestNotifyEmailId = 0
+    await syncNotifyBaseline()
+  }
+})
 
 onMounted(() => {
   window.addEventListener('resize', handleResize)
