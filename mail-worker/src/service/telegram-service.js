@@ -1,5 +1,6 @@
 import orm from '../entity/orm';
 import email from '../entity/email';
+import role from '../entity/role';
 import settingService from './setting-service';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -309,9 +310,12 @@ const telegramService = {
 		actorInfo.timezone = await timezoneUtils.getTimezone(c, actorInfo.activeIp);
 		await this.setIpDetailContext(c, actorInfo);
 		actorInfo.role = await this.attachRolePermInfo(c, actorInfo.role);
+
 		if (roleInfo?.roleId !== undefined && roleInfo?.roleId !== null) {
-			roleInfo = await this.attachRolePermInfo(c, roleInfo);
+			const roleRow = await orm(c).select().from(role).where(eq(role.roleId, roleInfo.roleId)).get();
+			roleInfo = await this.attachRolePermInfo(c, roleRow || roleInfo);
 		}
+
 		await this.sendTelegramMessage(c, roleManageMsgTemplate(action, roleInfo, actorInfo, extra));
 	},
 

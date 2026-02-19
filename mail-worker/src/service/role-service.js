@@ -90,7 +90,8 @@ const roleService = {
 			await orm(c).insert(rolePerm).values(rolePermList).run();
 		}
 
-		await this.sendRoleManagementWebhook(c, actorUserId, 'ROLE_UPDATED', { roleId, name }, oldRole ? `Previous name: ${oldRole.name}` : '');
+		const updatedRole = await orm(c).select().from(role).where(eq(role.roleId, roleId)).get();
+		await this.sendRoleManagementWebhook(c, actorUserId, 'ROLE_UPDATED', updatedRole || { roleId, name }, oldRole ? `Previous name: ${oldRole.name}` : '');
 	},
 
 	async delete(c, params, actorUserId) {
