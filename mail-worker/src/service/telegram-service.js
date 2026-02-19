@@ -403,7 +403,7 @@ const telegramService = {
 		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/setWebhook`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ url: webhookUrl, allowed_updates: ['message', 'edited_message', 'channel_post'] })
+			body: JSON.stringify({ url: webhookUrl, allowed_updates: ['message', 'edited_message', 'channel_post', 'callback_query'] })
 		});
 		const data = await res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
 		return { ...data, webhookUrl };
@@ -454,7 +454,9 @@ const telegramService = {
 		});
 		if (!res.ok) {
 			console.error(`Failed to edit Telegram bot reply status: ${res.status} response: ${await res.text()}`);
+			return false;
 		}
+		return true;
 	},
 
 	async answerCallbackQuery(c, callbackQueryId) {
@@ -608,6 +610,28 @@ Send Emails: ${numberCount.sendTotal}
 
 	async resolveCommand(c, command, pageArg, chatId, userId) {
 		switch (command) {
+			case '/start':
+			case '/help':
+				return {
+					text: `🤖 <b>Cloud Mail Bot Command Center</b>
+
+Use buttons below or type commands manually:
+
+📊 <b>/status</b> — system counters, bot enable state, allowed chat IDs
+👥 <b>/users [page]</b> — users + active IP + VPNAPI risk summary
+📨 <b>/mail [page]</b> — latest received/sent mail list
+🛡️ <b>/role</b> — role quotas + send/add-address permission flags
+🎟️ <b>/invite [page]</b> — invitation code list
+🆔 <b>/chatid</b> — show your current chat_id/user_id
+
+<b>Examples:</b>
+• <code>/users 2</code>
+• <code>/mail 3</code>
+• <code>/invite 1</code>
+
+Tap pager buttons to navigate page-by-page.`,
+					replyMarkup: this.buildMainMenu()
+				};
 			case '/mail':
 				return await this.formatMailCommand(c, pageArg);
 			case '/users':
@@ -621,10 +645,7 @@ Send Emails: ${numberCount.sendTotal}
 			case '/chatid':
 				return { text: `🆔 chat_id: <code>${chatId}</code>\n👤 user_id: <code>${userId || '-'}</code>`, replyMarkup: this.buildMainMenu() };
 			default:
-				return {
-					text: `📌 Commands:\n/mail\n/users\n/role\n/invite\n/status\n/chatid\n\nTips:\n/mail 2\n/users 3\n/invite 2`,
-					replyMarkup: this.buildMainMenu()
-				};
+				return await this.resolveCommand(c, '/help', pageArg, chatId, userId);
 		}
 	},
 
@@ -641,7 +662,8 @@ Send Emails: ${numberCount.sendTotal}
 			let pageArg = 1;
 			if (callback.data === 'cmd:menu') {
 				const result = await this.resolveCommand(c, '/help', 1, chatId, userId);
-				await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
+				const edited = await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
+				if (!edited) await this.sendTelegramReply(c, chatId, result.text, result.replyMarkup);
 				return;
 			}
 			const match = /^cmd:(mail|users|invite):(\d+)$/.exec(callback.data);
@@ -653,7 +675,8 @@ Send Emails: ${numberCount.sendTotal}
 				if (single) command = `/${single[1]}`;
 			}
 			const result = await this.resolveCommand(c, command, pageArg, chatId, userId);
-			await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
+			const edited = await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
+			if (!edited) await this.sendTelegramReply(c, chatId, result.text, result.replyMarkup);
 			return;
 		}
 
