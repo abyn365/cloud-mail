@@ -538,6 +538,18 @@ ${body}`, replyMarkup: this.buildPager('mail', currentPage, hasNext) };
 No user data.`, replyMarkup: this.buildMainMenu() };
 		const hasNext = rows.length > pageSize;
 		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
+		const visibleUserIds = visibleRows.map(item => item.userId);
+		let receiveCountMap = new Map();
+		if (visibleUserIds.length > 0) {
+			const placeholders = visibleUserIds.map(() => '?').join(',');
+			const { results } = await c.env.db.prepare(`
+				SELECT user_id as userId, COUNT(*) as receiveCount
+				FROM email
+				WHERE type = 0 AND is_del = 0 AND user_id IN (${placeholders})
+				GROUP BY user_id
+			`).bind(...visibleUserIds).all();
+			receiveCountMap = new Map((results || []).map(row => [row.userId, row.receiveCount]));
+		}
 		const roleRows = await orm(c).select().from(role);
 		const map = new Map(roleRows.map(r => [r.roleId, r.name]));
 		const bodyParts = [];
@@ -547,7 +559,8 @@ No user data.`, replyMarkup: this.buildMainMenu() };
 			const location = ipDetail?.location || {};
 			bodyParts.push(`🆔 <code>${item.userId}</code> ${item.email}
 Role: ${map.get(item.type) || (item.type === 0 ? 'admin' : 'unknown')} | Status: ${item.status} | Deleted: ${item.isDel}
-Send Count: ${item.sendCount || 0} | Created: ${item.createTime || '-'}
+Send Count: ${item.sendCount || 0} | Receive Count: ${receiveCountMap.get(item.userId) || 0}
+Created: ${item.createTime || '-'}
 IP: <code>${item.activeIp || '-'}</code>
 VPNAPI: vpn=${security.vpn ? 'Y' : 'N'} proxy=${security.proxy ? 'Y' : 'N'} tor=${security.tor ? 'Y' : 'N'}
 Loc: ${location.country || '-'} / ${location.city || '-'}`);
@@ -630,7 +643,7 @@ IP Cache Rows: ${cacheCount?.total || 0}
 Stale (≥2 days): ${staleCount?.total || 0}
 
 Webhook URL: <code>${webhookUrl}</code>
-Pending Updates: ${pending}
+Pending Updates: ${pending} (queued updates waiting delivery)
 Last Error: ${lastError}`;
 	},
 
