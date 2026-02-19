@@ -418,7 +418,7 @@ const telegramService = {
 		const data = await res.json().catch(() => ({ ok: false, description: 'Invalid Telegram response' }));
 		return data;
 	},
-	async sendTelegramReply(c, chatId, message) {
+	async sendTelegramReply(c, chatId, message, replyMarkup = null) {
 		const tgBotToken = await this.getBotToken(c);
 		if (!tgBotToken) return;
 		const payload = {
@@ -426,6 +426,7 @@ const telegramService = {
 			parse_mode: 'HTML',
 			text: message,
 		};
+		if (replyMarkup) payload.reply_markup = replyMarkup;
 		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
@@ -436,8 +437,56 @@ const telegramService = {
 		}
 	},
 
+	async editTelegramReply(c, chatId, messageId, message, replyMarkup = null) {
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken) return;
+		const payload = {
+			chat_id: String(chatId),
+			message_id: messageId,
+			parse_mode: 'HTML',
+			text: message,
+		};
+		if (replyMarkup) payload.reply_markup = replyMarkup;
+		const res = await fetch(`https://api.telegram.org/bot${tgBotToken}/editMessageText`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload)
+		});
+		if (!res.ok) {
+			console.error(`Failed to edit Telegram bot reply status: ${res.status} response: ${await res.text()}`);
+		}
+	},
+
+	async answerCallbackQuery(c, callbackQueryId) {
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken || !callbackQueryId) return;
+		await fetch(`https://api.telegram.org/bot${tgBotToken}/answerCallbackQuery`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ callback_query_id: callbackQueryId })
+		});
+	},
+
+	buildMainMenu() {
+		return {
+			inline_keyboard: [
+				[{ text: '📊 Status', callback_data: 'cmd:status' }, { text: '🛡️ Role', callback_data: 'cmd:role' }],
+				[{ text: '📨 Mail', callback_data: 'cmd:mail:1' }, { text: '👥 Users', callback_data: 'cmd:users:1' }],
+				[{ text: '🎟️ Invite', callback_data: 'cmd:invite:1' }, { text: '🆔 Chat ID', callback_data: 'cmd:chatid' }]
+			]
+		};
+	},
+
+	buildPager(command, page, hasNext) {
+		const buttons = [];
+		if (page > 1) buttons.push({ text: '⬅️ Prev', callback_data: `cmd:${command}:${page - 1}` });
+		buttons.push({ text: `📄 ${page}`, callback_data: 'cmd:noop' });
+		if (hasNext) buttons.push({ text: 'Next ➡️', callback_data: `cmd:${command}:${page + 1}` });
+		return { inline_keyboard: [buttons, [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+	},
+
 	async formatMailCommand(c, page = 1) {
-		const pageSize = 20;
+		const pageSize = 10;
 		const currentPage = Math.max(1, Number(page) || 1);
 		const rows = await orm(c).select({
 			emailId: email.emailId,
@@ -447,22 +496,24 @@ const telegramService = {
 			type: email.type,
 			isDel: email.isDel,
 			createTime: email.createTime,
-		}).from(email).orderBy(desc(email.emailId)).limit(pageSize).offset((currentPage - 1) * pageSize);
+		}).from(email).orderBy(desc(email.emailId)).limit(pageSize + 1).offset((currentPage - 1) * pageSize);
 
-		if (rows.length === 0) return `📭 <b>/mail</b>
-No email data.`;
-		const body = rows.map(item => `🆔 <code>${item.emailId}</code> | ${item.type === 0 ? 'RECV' : 'SEND'} | del=${item.isDel}
+		if (rows.length === 0) return { text: `📭 <b>/mail</b>
+No email data.`, replyMarkup: this.buildMainMenu() };
+		const hasNext = rows.length > pageSize;
+		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
+		const body = visibleRows.map(item => `🆔 <code>${item.emailId}</code> | ${item.type === 0 ? 'RECV' : 'SEND'} | del=${item.isDel}
 From: <code>${item.sendEmail || '-'}</code>
 To: <code>${item.toEmail || '-'}</code>
 Subj: ${item.subject || '-'}
 At: ${item.createTime}`).join('\n\n');
-		return `📨 <b>/mail</b> (page ${currentPage})
+		return { text: `📨 <b>/mail</b> (page ${currentPage})
 
-${body}`;
+${body}`, replyMarkup: this.buildPager('mail', currentPage, hasNext) };
 	},
 
 	async formatUsersCommand(c, page = 1) {
-		const pageSize = 20;
+		const pageSize = 5;
 		const currentPage = Math.max(1, Number(page) || 1);
 		const rows = await orm(c).select({
 			userId: user.userId,
@@ -470,19 +521,31 @@ ${body}`;
 			status: user.status,
 			isDel: user.isDel,
 			type: user.type,
+			activeIp: user.activeIp,
 			sendCount: user.sendCount,
 			createTime: user.createTime,
-		}).from(user).orderBy(desc(user.userId)).limit(pageSize).offset((currentPage - 1) * pageSize);
-		if (rows.length === 0) return `👤 <b>/users</b>
-No user data.`;
+		}).from(user).orderBy(desc(user.userId)).limit(pageSize + 1).offset((currentPage - 1) * pageSize);
+		if (rows.length === 0) return { text: `👤 <b>/users</b>
+No user data.`, replyMarkup: this.buildMainMenu() };
+		const hasNext = rows.length > pageSize;
+		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
 		const roleRows = await orm(c).select().from(role);
 		const map = new Map(roleRows.map(r => [r.roleId, r.name]));
-		const body = rows.map(item => `🆔 <code>${item.userId}</code> ${item.email}
+		const bodyParts = [];
+		for (const item of visibleRows) {
+			const ipDetail = await this.queryIpSecurity(c, item.activeIp);
+			const security = ipDetail?.security || {};
+			const location = ipDetail?.location || {};
+			bodyParts.push(`🆔 <code>${item.userId}</code> ${item.email}
 Role: ${map.get(item.type) || (item.type === 0 ? 'admin' : 'unknown')} | Status: ${item.status} | Deleted: ${item.isDel}
-Send Count: ${item.sendCount || 0} | Created: ${item.createTime || '-'}`).join('\n\n');
-		return `👥 <b>/users</b> (page ${currentPage})
+Send Count: ${item.sendCount || 0} | Created: ${item.createTime || '-'}
+IP: <code>${item.activeIp || '-'}</code>
+VPNAPI: vpn=${security.vpn ? 'Y' : 'N'} proxy=${security.proxy ? 'Y' : 'N'} tor=${security.tor ? 'Y' : 'N'}
+Loc: ${location.country || '-'} / ${location.city || '-'}`);
+		}
+		return { text: `👥 <b>/users</b> (page ${currentPage})
 
-${body}`;
+${bodyParts.join('\n\n')}`, replyMarkup: this.buildPager('users', currentPage, hasNext) };
 	},
 
 	async formatRoleCommand(c) {
@@ -503,7 +566,7 @@ ${body}`;
 	},
 
 	async formatInviteCommand(c, page = 1) {
-		const pageSize = 30;
+		const pageSize = 10;
 		const currentPage = Math.max(1, Number(page) || 1);
 		const rows = await orm(c).select({
 			regKeyId: regKey.regKeyId,
@@ -512,18 +575,20 @@ ${body}`;
 			roleId: regKey.roleId,
 			expireTime: regKey.expireTime,
 			createTime: regKey.createTime,
-		}).from(regKey).orderBy(desc(regKey.regKeyId)).limit(pageSize).offset((currentPage - 1) * pageSize);
-		if (rows.length === 0) return `🎟️ <b>/invite</b>
-No invite code data.`;
+		}).from(regKey).orderBy(desc(regKey.regKeyId)).limit(pageSize + 1).offset((currentPage - 1) * pageSize);
+		if (rows.length === 0) return { text: `🎟️ <b>/invite</b>
+No invite code data.`, replyMarkup: this.buildMainMenu() };
+		const hasNext = rows.length > pageSize;
+		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
 		const roleRows = await orm(c).select().from(role);
 		const map = new Map(roleRows.map(r => [r.roleId, r.name]));
-		const body = rows.map(item => `🆔 <code>${item.regKeyId}</code> <code>${item.code}</code>
+		const body = visibleRows.map(item => `🆔 <code>${item.regKeyId}</code> <code>${item.code}</code>
 Role: ${map.get(item.roleId) || item.roleId}
 Remaining: ${item.count} | Expire: ${item.expireTime || '-'}
 Created: ${item.createTime || '-'}`).join('\n\n');
-		return `🎟️ <b>/invite</b> (page ${currentPage})
+		return { text: `🎟️ <b>/invite</b> (page ${currentPage})
 
-${body}`;
+${body}`, replyMarkup: this.buildPager('invite', currentPage, hasNext) };
 	},
 
 	async formatStatusCommand(c) {
@@ -541,7 +606,57 @@ Send Emails: ${numberCount.sendTotal}
 🔐 Allowed CHAT_ID: ${allowed.length > 0 ? allowed.join(', ') : '(empty)'}`;
 	},
 
+	async resolveCommand(c, command, pageArg, chatId, userId) {
+		switch (command) {
+			case '/mail':
+				return await this.formatMailCommand(c, pageArg);
+			case '/users':
+				return await this.formatUsersCommand(c, pageArg);
+			case '/role':
+				return { text: await this.formatRoleCommand(c), replyMarkup: this.buildMainMenu() };
+			case '/invite':
+				return await this.formatInviteCommand(c, pageArg);
+			case '/status':
+				return { text: await this.formatStatusCommand(c), replyMarkup: this.buildMainMenu() };
+			case '/chatid':
+				return { text: `🆔 chat_id: <code>${chatId}</code>\n👤 user_id: <code>${userId || '-'}</code>`, replyMarkup: this.buildMainMenu() };
+			default:
+				return {
+					text: `📌 Commands:\n/mail\n/users\n/role\n/invite\n/status\n/chatid\n\nTips:\n/mail 2\n/users 3\n/invite 2`,
+					replyMarkup: this.buildMainMenu()
+				};
+		}
+	},
+
 	async handleBotWebhook(c, body) {
+		const callback = body?.callback_query;
+		if (callback?.data) {
+			const chatId = callback?.message?.chat?.id;
+			const userId = callback?.from?.id;
+			if (!chatId) return;
+			await this.answerCallbackQuery(c, callback.id);
+			if (!await this.isAllowedChat(c, chatId, userId)) return;
+			if (callback.data === 'cmd:noop') return;
+			let command = '/help';
+			let pageArg = 1;
+			if (callback.data === 'cmd:menu') {
+				const result = await this.resolveCommand(c, '/help', 1, chatId, userId);
+				await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
+				return;
+			}
+			const match = /^cmd:(mail|users|invite):(\d+)$/.exec(callback.data);
+			if (match) {
+				command = `/${match[1]}`;
+				pageArg = Number(match[2] || 1);
+			} else {
+				const single = /^cmd:(status|role|chatid)$/.exec(callback.data);
+				if (single) command = `/${single[1]}`;
+			}
+			const result = await this.resolveCommand(c, command, pageArg, chatId, userId);
+			await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
+			return;
+		}
+
 		const message = body?.message || body?.edited_message || body?.channel_post;
 		const text = message?.text?.trim();
 		const chatId = message?.chat?.id;
@@ -565,45 +680,12 @@ Send Emails: ${numberCount.sendTotal}
 		const command = rawCommand.includes('@') ? rawCommand.split('@')[0] : rawCommand;
 		console.log(`Telegram bot command received chat_id=${chatId} user_id=${userId || '-'} command=${command}`);
 
-		let reply = '';
-		switch (command) {
-			case '/mail':
-				reply = await this.formatMailCommand(c, pageArg);
-				break;
-			case '/users':
-				reply = await this.formatUsersCommand(c, pageArg);
-				break;
-			case '/role':
-				reply = await this.formatRoleCommand(c);
-				break;
-			case '/invite':
-				reply = await this.formatInviteCommand(c, pageArg);
-				break;
-			case '/status':
-				reply = await this.formatStatusCommand(c);
-				break;
-			case '/chatid':
-				reply = `🆔 chat_id: <code>${chatId}</code>\n👤 user_id: <code>${userId || '-'}</code>`;
-				break;
-			default:
-				reply = `📌 Commands:
-/mail
-/users
-/role
-/invite
-/status
-/chatid
-
-Tips:
-/mail 2  (open page 2)
-/users 3
-/invite 2`;
-		}
-
+		const result = await this.resolveCommand(c, command, pageArg, chatId, userId);
+		let reply = result.text;
 		if (reply.length > 3800) {
 			reply = `${reply.slice(0, 3800)}\n\n...truncated`;
 		}
-		await this.sendTelegramReply(c, chatId, reply);
+		await this.sendTelegramReply(c, chatId, reply, result.replyMarkup);
 	},
 
 };
