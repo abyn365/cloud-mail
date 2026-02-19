@@ -7,7 +7,11 @@ app.get('/telegram/getEmail/:token', async (c) => {
 	return c.html(content)
 });
 
-
+app.get('/telegram/getBanEmail/:token', async (c) => {
+	const content = await telegramService.getBanEmailContent(c, c.req.param());
+	c.header('Cache-Control', 'no-store');
+	return c.html(content)
+});
 
 app.get('/telegram/webhook/setup', async (c) => {
 	const result = await telegramService.setWebhook(c);
