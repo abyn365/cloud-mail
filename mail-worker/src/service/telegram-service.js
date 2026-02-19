@@ -133,10 +133,11 @@ const telegramService = {
 			const cache = await c.env.db.prepare('SELECT data, update_time FROM ip_security_cache WHERE ip = ?').bind(ip).first();
 			if (cache?.data) {
 				const cacheTime = cache.update_time ? dayjs.utc(cache.update_time) : null;
-				const cacheExpired = !cacheTime || dayjs.utc().diff(cacheTime, 'hour') >= 24;
+				const cacheExpired = !cacheTime || dayjs.utc().diff(cacheTime, 'hour') >= 48;
 				if (!cacheExpired) {
 					return JSON.parse(cache.data);
 				}
+				await c.env.db.prepare('DELETE FROM ip_security_cache WHERE ip = ?').bind(ip).run();
 			}
 		} catch (e) {
 			console.error('Failed to read ip cache:', e.message);
@@ -479,7 +480,8 @@ const telegramService = {
 			inline_keyboard: [
 				[{ text: '📊 Status', callback_data: 'cmd:status' }, { text: '🛡️ Role', callback_data: 'cmd:role' }],
 				[{ text: '📨 Mail', callback_data: 'cmd:mail:1' }, { text: '👥 Users', callback_data: 'cmd:users:1' }],
-				[{ text: '🎟️ Invite', callback_data: 'cmd:invite:1' }, { text: '🆔 Chat ID', callback_data: 'cmd:chatid' }]
+				[{ text: '🎟️ Invite', callback_data: 'cmd:invite:1' }, { text: '🆔 Chat ID', callback_data: 'cmd:chatid' }],
+				[{ text: '🧭 System', callback_data: 'cmd:system' }, { text: '❓ Help', callback_data: 'cmd:help' }]
 			]
 		};
 	},
@@ -613,6 +615,25 @@ Send Emails: ${numberCount.sendTotal}
 🔐 Allowed CHAT_ID: ${allowed.length > 0 ? allowed.join(', ') : '(empty)'}`;
 	},
 
+	async formatSystemCommand(c) {
+		const [cacheCount, staleCount, webhookInfo] = await Promise.all([
+			c.env.db.prepare('SELECT COUNT(*) as total FROM ip_security_cache').first(),
+			c.env.db.prepare("SELECT COUNT(*) as total FROM ip_security_cache WHERE update_time <= datetime('now', '-2 day')").first(),
+			this.getWebhookInfo(c)
+		]);
+		const webhookUrl = webhookInfo?.result?.url || '-';
+		const pending = webhookInfo?.result?.pending_update_count ?? '-';
+		const lastError = webhookInfo?.result?.last_error_message || '-';
+		return `🧭 <b>/system</b>
+
+IP Cache Rows: ${cacheCount?.total || 0}
+Stale (≥2 days): ${staleCount?.total || 0}
+
+Webhook URL: <code>${webhookUrl}</code>
+Pending Updates: ${pending}
+Last Error: ${lastError}`;
+	},
+
 	async resolveCommand(c, command, pageArg, chatId, userId) {
 		switch (command) {
 			case '/start':
@@ -628,11 +649,13 @@ Use buttons below or type commands manually:
 🛡️ <b>/role</b> — role quotas + send/add-address permission flags
 🎟️ <b>/invite [page]</b> — invitation code list
 🆔 <b>/chatid</b> — show your current chat_id/user_id
+🧭 <b>/system</b> — cache + webhook diagnostics
 
 <b>Examples:</b>
 • <code>/users 2</code>
 • <code>/mail 3</code>
 • <code>/invite 1</code>
+• <code>/system</code>
 
 Tap pager buttons to navigate page-by-page.`,
 					replyMarkup: this.buildMainMenu()
@@ -649,6 +672,8 @@ Tap pager buttons to navigate page-by-page.`,
 				return { text: await this.formatStatusCommand(c), replyMarkup: this.buildMainMenu() };
 			case '/chatid':
 				return { text: `🆔 chat_id: <code>${chatId}</code>\n👤 user_id: <code>${userId || '-'}</code>`, replyMarkup: this.buildMainMenu() };
+			case '/system':
+				return { text: await this.formatSystemCommand(c), replyMarkup: this.buildMainMenu() };
 			default:
 				return await this.resolveCommand(c, '/help', pageArg, chatId, userId);
 		}
@@ -671,12 +696,18 @@ Tap pager buttons to navigate page-by-page.`,
 				if (!edited) await this.sendTelegramReply(c, chatId, result.text, result.replyMarkup);
 				return;
 			}
+			if (callback.data === 'cmd:help') {
+				const result = await this.resolveCommand(c, '/help', 1, chatId, userId);
+				const edited = await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
+				if (!edited) await this.sendTelegramReply(c, chatId, result.text, result.replyMarkup);
+				return;
+			}
 			const match = /^cmd:(mail|users|invite):(\d+)$/.exec(callback.data);
 			if (match) {
 				command = `/${match[1]}`;
 				pageArg = Number(match[2] || 1);
 			} else {
-				const single = /^cmd:(status|role|chatid)$/.exec(callback.data);
+				const single = /^cmd:(status|role|chatid|system)$/.exec(callback.data);
 				if (single) command = `/${single[1]}`;
 			}
 			const result = await this.resolveCommand(c, command, pageArg, chatId, userId);
