@@ -54,6 +54,18 @@ export async function email(message, env, ctx) {
 			`).bind(senderEmail, senderDomain).first();
 			if (blacklisted) {
 				message.setReject('Sender is blacklisted');
+				// Log silently to security board (no notification to user)
+				try {
+					await telegramService.logSystemEvent(
+						{ env },
+						'security.blacklist.blocked',
+						'warn',
+						`🚫 Blacklisted sender blocked\nFrom: ${senderEmail}\nTo: ${message.to}\nMatched rule: ${blacklisted.email}`,
+						{ senderEmail, to: message.to, matchedRule: blacklisted.email }
+					);
+				} catch (e) {
+					console.error('Failed to log blacklist block event:', e);
+				}
 				return;
 			}
 		} catch (e) {
