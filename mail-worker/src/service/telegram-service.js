@@ -629,14 +629,18 @@ Send Emails: ${numberCount.sendTotal}
 	},
 
 	async formatSystemCommand(c) {
-		const [cacheCount, staleCount, webhookInfo] = await Promise.all([
+		const [cacheCount, staleCount, webhookInfo, recentIpLogs] = await Promise.all([
 			c.env.db.prepare('SELECT COUNT(*) as total FROM ip_security_cache').first(),
 			c.env.db.prepare("SELECT COUNT(*) as total FROM ip_security_cache WHERE update_time <= datetime('now', '-2 day')").first(),
-			this.getWebhookInfo(c)
+			this.getWebhookInfo(c),
+			c.env.db.prepare('SELECT ip, update_time FROM ip_security_cache ORDER BY update_time DESC LIMIT 3').all()
 		]);
 		const webhookUrl = webhookInfo?.result?.url || '-';
 		const pending = webhookInfo?.result?.pending_update_count ?? '-';
 		const lastError = webhookInfo?.result?.last_error_message || '-';
+		const logs = (recentIpLogs?.results || []).map((row, index) =>
+			`${index + 1}. [${row.update_time || '-'}] IP intel refreshed: <code>${row.ip || '-'}</code>`
+		).join('\n');
 		return `🧭 <b>/system</b>
 
 IP Cache Rows: ${cacheCount?.total || 0}
@@ -644,7 +648,10 @@ Stale (≥2 days): ${staleCount?.total || 0}
 
 Webhook URL: <code>${webhookUrl}</code>
 Pending Updates: ${pending} (queued updates waiting delivery)
-Last Error: ${lastError}`;
+Last Error: ${lastError}
+
+📜 Recent System Logs (3):
+${logs || 'No logs yet.'}`;
 	},
 
 	async resolveCommand(c, command, pageArg, chatId, userId) {
