@@ -130,9 +130,13 @@ const telegramService = {
 		if (!ip) return null;
 
 		try {
-			const cache = await c.env.db.prepare('SELECT data FROM ip_security_cache WHERE ip = ?').bind(ip).first();
+			const cache = await c.env.db.prepare('SELECT data, update_time FROM ip_security_cache WHERE ip = ?').bind(ip).first();
 			if (cache?.data) {
-				return JSON.parse(cache.data);
+				const cacheTime = cache.update_time ? dayjs.utc(cache.update_time) : null;
+				const cacheExpired = !cacheTime || dayjs.utc().diff(cacheTime, 'hour') >= 24;
+				if (!cacheExpired) {
+					return JSON.parse(cache.data);
+				}
 			}
 		} catch (e) {
 			console.error('Failed to read ip cache:', e.message);
@@ -187,6 +191,7 @@ const telegramService = {
 
 	async sendIpSecurityNotification(c, userInfo) {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
+		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		const ipDetail = await this.queryIpSecurity(c, userInfo.activeIp);
 		const message = ipSecurityMsgTemplate(userInfo, ipDetail);
 		await this.sendTelegramMessage(c, message);
