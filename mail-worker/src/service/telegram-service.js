@@ -72,7 +72,13 @@ const telegramService = {
 		}
 	},
 
+	async shouldSendWebhookPush(c) {
+		const logOnly = String(c.env.TG_EVENT_LOG_ONLY || c.env.tg_event_log_only || '').toLowerCase();
+		return !(logOnly === '1' || logOnly === 'true' || logOnly === 'yes');
+	},
+
 	async sendTelegramMessage(c, message, reply_markup = null) {
+		if (!await this.shouldSendWebhookPush(c)) return;
 		const { tgChatId } = await settingService.query(c);
 		const tgBotToken = await this.getBotToken(c);
 		if (!tgBotToken || !tgChatId) return;
@@ -215,6 +221,7 @@ const telegramService = {
 		const jwtToken = await jwtUtils.generateToken(c, { emailId: emailData.emailId });
 		const webAppUrl = customDomain ? `${domainUtils.toOssDomain(customDomain)}/api/telegram/getEmail/${jwtToken}` : 'https://www.cloudflare.com/404';
 		const message = emailMsgTemplate(emailData, tgMsgTo, tgMsgFrom, tgMsgText, null);
+		await this.logSystemEvent(c, 'email.received', EVENT_LEVEL.INFO, `Email received for ${emailData?.toEmail || '-'}`, { emailId: emailData?.emailId, webAppUrl, from: emailData?.sendEmail, to: emailData?.toEmail });
 		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
 	},
 
@@ -222,6 +229,7 @@ const telegramService = {
 		userInfo.timezone = await timezoneUtils.getTimezone(c, userInfo.activeIp);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		const ipDetail = await this.queryIpSecurity(c, userInfo.activeIp);
+		await this.logSystemEvent(c, 'security.ip_changed', EVENT_LEVEL.WARN, `Recent IP updated for ${userInfo?.email || '-'}`, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false, relay: ipDetail?.security?.relay || false });
 		const message = ipSecurityMsgTemplate(userInfo, ipDetail);
 		await this.sendTelegramMessage(c, message);
 	},
@@ -254,6 +262,7 @@ const telegramService = {
 			});
 		}
 
+		await this.logSystemEvent(c, 'auth.login.success', EVENT_LEVEL.INFO, `Login success: ${userInfo?.email || '-'}`, { userId: userInfo?.userId, email: userInfo?.email, ip: userInfo?.activeIp });
 		await this.sendTelegramMessage(c, message);
 	},
 
@@ -283,7 +292,7 @@ const telegramService = {
 		await this.setIpDetailContext(c, userInfo);
 		userInfo.role = await this.attachRolePermInfo(c, userInfo.role);
 		const message = sendEmailMsgTemplate(emailInfo, userInfo);
-		await this.logSystemEvent(c, 'email.sent', EVENT_LEVEL.INFO, 'Email sent notification emitted', { emailId: emailInfo?.emailId, userId: userInfo?.userId });
+		await this.logSystemEvent(c, 'email.sent', EVENT_LEVEL.INFO, `Email sent by ${userInfo?.email || '-'}`, { emailId: emailInfo?.emailId, userId: userInfo?.userId, from: emailInfo?.sendEmail, to: emailInfo?.toEmail, webAppUrl });
 		await this.sendTelegramMessage(c, message, { inline_keyboard: [[{ text: 'Check', web_app: { url: webAppUrl } }]] });
 	},
 
@@ -375,6 +384,7 @@ const telegramService = {
 	async sendFailedLoginNotification(c, email, ip, attempts, device, os, browser) {
 		const userTimezone = await timezoneUtils.getTimezone(c, ip);
 		const ipDetail = await this.queryIpSecurity(c, ip);
+		await this.logSystemEvent(c, 'auth.login.failed', EVENT_LEVEL.WARN, `Failed login: ${email || '-'}`, { email, ip, attempts, device, os, browser, vpn: ipDetail?.security?.vpn || false, proxy: ipDetail?.security?.proxy || false, tor: ipDetail?.security?.tor || false });
 		await this.sendTelegramMessage(c, failedLoginMsgTemplate(email, ip, attempts, device, os, browser, userTimezone, ipDetail));
 	},
 
@@ -644,11 +654,45 @@ ${item.message}
 At: ${item.createTime}`).join('\n\n');
 			return { text: `🗂 <b>/events</b> (page ${currentPage})
 
-${body}`, replyMarkup: this.buildPager('events', currentPage, hasNext) };
+${body}
+
+Tip: use <code>/event &lt;id&gt;</code> for full detail + preview link.`, replyMarkup: this.buildPager('events', currentPage, hasNext) };
 		} catch (e) {
 			return { text: `🗂 <b>/events</b>
 Unable to query event log: ${e.message}`, replyMarkup: this.buildMainMenu() };
 		}
+	},
+
+	async formatEventDetailCommand(c, idArg) {
+		const logId = Number(idArg || 0);
+		if (!logId) {
+			return { text: `🧾 <b>/event</b>
+Usage: <code>/event 123</code>`, replyMarkup: this.buildMainMenu() };
+		}
+		const row = await c.env.db.prepare(`
+			SELECT log_id as logId, event_type as eventType, level, message, meta, create_time as createTime
+			FROM webhook_event_log
+			WHERE log_id = ?
+		`).bind(logId).first();
+		if (!row) {
+			return { text: `🧾 <b>/event</b>
+Event #${logId} not found.`, replyMarkup: this.buildMainMenu() };
+		}
+		let meta = {};
+		try { meta = row.meta ? JSON.parse(row.meta) : {}; } catch (_) {}
+		const previewUrl = meta?.webAppUrl;
+		const detail = `🧾 <b>/event ${row.logId}</b>
+
+Type: ${row.eventType}
+Level: ${row.level}
+At: ${row.createTime}
+Message: ${row.message}
+
+Meta: <code>${JSON.stringify(meta || {}, null, 2).slice(0, 1200)}</code>`;
+		const replyMarkup = previewUrl
+			? { inline_keyboard: [[{ text: '🔎 Open Email Preview', web_app: { url: previewUrl } }], [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			: this.buildMainMenu();
+		return { text: detail, replyMarkup };
 	},
 
 	async formatMailCommand(c, page = 1) {
@@ -800,11 +844,12 @@ Send Emails: ${numberCount.sendTotal}
 			`).all()
 		]);
 		const webhookUrl = webhookInfo?.result?.url || '-';
-		const pending = webhookInfo?.result?.pending_update_count ?? '-';
-		const lastError = webhookInfo?.result?.last_error_message || '-';
-		const logs = (recentSystemLogs?.results || []).map((row, index) =>
-			`${index + 1}. [${row.createTime || '-'}] [${row.level || '-'}] ${row.eventType}: ${row.message}`
-		).join('\n');
+			const pending = webhookInfo?.result?.pending_update_count ?? '-';
+			const lastError = webhookInfo?.result?.last_error_message || '-';
+			const pushMode = await this.shouldSendWebhookPush(c) ? 'Push + Log' : 'Log only (no spam)';
+			const logs = (recentSystemLogs?.results || []).map((row, index) =>
+				`${index + 1}. [${row.createTime || '-'}] [${row.level || '-'}] ${row.eventType}: ${row.message}`
+			).join('\n');
 		return `🧭 <b>/system</b>
 
 IP Cache Rows: ${cacheCount?.total || 0}
@@ -813,6 +858,7 @@ Stale (≥2 days): ${staleCount?.total || 0}
 Webhook URL: <code>${webhookUrl}</code>
 Pending Updates: ${pending} (queued updates waiting delivery)
 Last Error: ${lastError}
+Webhook Notify Mode: ${pushMode}
 
 📜 Recent Email/Error Logs (3):
 ${logs || 'No logs yet.'}`;
@@ -840,6 +886,7 @@ Use buttons below or type commands manually:
 📈 <b>/stats [range]</b> — timeline stats, e.g. <code>/stats 7d</code>
 🧭 <b>/system</b> — webhook health + recent email/error logs
 🗂 <b>/events [page]</b> — browse webhook/system event log
+🧾 <b>/event &lt;id&gt;</b> — open one event detail + preview link
 🎟️ <b>/invite [page]</b> — invitation codes
 🆔 <b>/chatid</b> — your current chat_id/user_id
 
@@ -847,7 +894,8 @@ Use buttons below or type commands manually:
 • <code>/users 2</code>
 • <code>/whois 1.1.1.1</code>
 • <code>/stats 3d</code>
-• <code>/events 1</code>`,
+• <code>/events 1</code>
+• <code>/event 42</code>`,
 					replyMarkup: this.buildMainMenu()
 				};
 			case '/mail':
@@ -872,6 +920,8 @@ Use buttons below or type commands manually:
 				return await this.formatStatsCommand(c, args?.[0] || '7d');
 			case '/events':
 				return await this.formatEventsCommand(c, pageArg);
+			case '/event':
+				return await this.formatEventDetailCommand(c, args?.[0]);
 			default:
 				return await this.resolveCommand(c, '/help', [], chatId, userId);
 		}
