@@ -593,7 +593,14 @@ Blocked at: ${row.createTime} UTC<br>
 			body: JSON.stringify(payload)
 		});
 		if (!res.ok) {
-			console.error(`Failed to edit Telegram bot reply status: ${res.status} response: ${await res.text()}`);
+			const raw = await res.text();
+			let data = null;
+			try { data = JSON.parse(raw); } catch (_) {}
+			const description = String(data?.description || raw || '').toLowerCase();
+			if (description.includes('message is not modified')) {
+				return true;
+			}
+			console.error(`Failed to edit Telegram bot reply status: ${res.status} response: ${raw}`);
 			return false;
 		}
 		return true;
@@ -2449,8 +2456,18 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 
 			const result = await this.resolveCommand(c, command, args, chatId, userId);
 			const edited = await this.editTelegramReply(c, chatId, callback.message.message_id, result.text, result.replyMarkup);
-			if (edited) await this.saveLastBotMessageId(c, chatId, callback.message.message_id);
-			if (!edited) await this.sendOrEditSingleChatMessage(c, chatId, result.text, result.replyMarkup);
+			if (edited) {
+				await this.saveLastBotMessageId(c, chatId, callback.message.message_id);
+				return;
+			}
+
+			const isRefreshCallback = String(callback.data || '').startsWith('cmd:refresh:');
+			if (isRefreshCallback) {
+				await this.saveLastBotMessageId(c, chatId, callback.message.message_id);
+				return;
+			}
+
+			await this.sendOrEditSingleChatMessage(c, chatId, result.text, result.replyMarkup);
 			return;
 		}
 
