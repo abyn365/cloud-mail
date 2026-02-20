@@ -704,7 +704,6 @@ Blocked at: ${row.createTime} UTC<br>
 
 	// ─── MENU BUILDERS ────────────────────────────────────────────────────────
 
-
 	appendRefreshButton(replyMarkup, callbackData = 'cmd:refresh:status', label = '🔄 Refresh') {
 		const safeMarkup = replyMarkup && Array.isArray(replyMarkup.inline_keyboard)
 			? { inline_keyboard: [...replyMarkup.inline_keyboard] }
@@ -720,20 +719,40 @@ Blocked at: ${row.createTime} UTC<br>
 				[{ text: '🧭 System', callback_data: 'cmd:system' }, { text: '🗂 Events', callback_data: 'cmd:events:1' }],
 				[{ text: '📨 Mail', callback_data: 'cmd:mail:1' }, { text: '📬 Recent', callback_data: 'cmd:recent' }],
 				[{ text: '📈 Stats', callback_data: 'cmd:stats:7d' }, { text: '🔎 Search', callback_data: 'cmd:search' }],
-				[{ text: '🛠️ Admin', callback_data: 'cmd:admin' }, { text: '🌐 Whois', callback_data: 'cmd:whois:help' }],
-				[{ text: '🆔 Chat ID', callback_data: 'cmd:chatid' }, { text: '❓ Help', callback_data: 'cmd:help' }],
+				[{ text: '🛠️ Admin', callback_data: 'cmd:admin' }, { text: '🆔 Chat ID', callback_data: 'cmd:chatid' }],
+				[{ text: '❓ Help', callback_data: 'cmd:help' }],
 			]
 		};
 	},
 
-
-	buildAdminShortcutMenu() {
+	buildAdminMenu() {
 		return {
 			inline_keyboard: [
-				[{ text: '👥 User List', callback_data: 'cmd:admin:user:list:1' }, { text: '🎟️ Invite List', callback_data: 'cmd:admin:invite:list:1' }],
-				[{ text: '🛡️ Role List', callback_data: 'cmd:admin:role:list' }, { text: '📬 Account Help', callback_data: 'cmd:admin:account' }],
-				[{ text: '📧 Email Delete Help', callback_data: 'cmd:admin:email' }],
-				[{ text: '⬅️ Back', callback_data: 'cmd:menu' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]
+				[{ text: '👥 Users', callback_data: 'cmd:admin:user:list:1' }, { text: '🎟️ Invites', callback_data: 'cmd:admin:invite:list:1' }],
+				[{ text: '🛡️ Roles', callback_data: 'cmd:admin:role:list' }, { text: '📬 Address Help', callback_data: 'cmd:admin:account' }],
+				[{ text: '📧 Email Help', callback_data: 'cmd:admin:email' }],
+				[{ text: '⬅️ Back to Menu', callback_data: 'cmd:menu' }]
+			]
+		};
+	},
+
+	buildSecurityMenu() {
+		return {
+			inline_keyboard: [
+				[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🔑 Keywords', callback_data: 'cmd:keyword' }],
+				[{ text: '🗂 Events', callback_data: 'cmd:events:1' }, { text: '📊 Status', callback_data: 'cmd:status' }],
+				[{ text: '⬅️ Back to Menu', callback_data: 'cmd:menu' }]
+			]
+		};
+	},
+
+	buildSearchMenu() {
+		return {
+			inline_keyboard: [
+				[{ text: '👤 User/Address', callback_data: 'cmd:searchhelp:user' }, { text: '📨 Email ID', callback_data: 'cmd:searchhelp:email' }],
+				[{ text: '🎟 Invite Code', callback_data: 'cmd:searchhelp:invite' }, { text: '🛡 Role', callback_data: 'cmd:searchhelp:role' }],
+				[{ text: '🧾 Event ID', callback_data: 'cmd:searchhelp:event' }, { text: '🔤 Keyword', callback_data: 'cmd:searchhelp:keyword' }],
+				[{ text: '⬅️ Back to Menu', callback_data: 'cmd:menu' }]
 			]
 		};
 	},
@@ -789,17 +808,18 @@ Blocked at: ${row.createTime} UTC<br>
 		};
 	},
 
-	buildPager(command, page, hasNext) {
+	buildPager(command, page, hasNext, backCallback = 'cmd:menu') {
 		const buttons = [];
 		if (page > 1) buttons.push({ text: '⬅️ Prev', callback_data: `cmd:${command}:${page - 1}` });
 		buttons.push({ text: `📄 ${page}`, callback_data: 'cmd:noop' });
 		if (hasNext) buttons.push({ text: 'Next ➡️', callback_data: `cmd:${command}:${page + 1}` });
-		return { inline_keyboard: [buttons, [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		return { inline_keyboard: [buttons, [{ text: '⬅️ Back', callback_data: backCallback }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
 	},
 
-	buildDetailMenu({ backText, backCallbackData, previewUrl }) {
+	buildDetailMenu({ backText, backCallbackData, previewUrl, extraButtons = [] }) {
 		const rows = [];
 		if (previewUrl) rows.push([{ text: '🔎 Open Email Preview', web_app: { url: previewUrl } }]);
+		if (extraButtons.length) rows.push(extraButtons);
 		rows.push([
 			{ text: backText || '⬅️ Back to List', callback_data: backCallbackData || 'cmd:menu' },
 			{ text: '🏠 Menu', callback_data: 'cmd:menu' }
@@ -808,50 +828,21 @@ Blocked at: ${row.createTime} UTC<br>
 	},
 
 	mapUserStatusLabel(status) {
-		if (Number(status) === 0) return '0 (Active)';
-		if (Number(status) === 1) return '1 (Banned)';
+		if (Number(status) === 0) return '✅ Active';
+		if (Number(status) === 1) return '🚫 Banned';
 		return `${status} (Unknown)`;
-	},
-
-	buildSearchMenu() {
-		return {
-			inline_keyboard: [
-				[{ text: '👤 User/Address', callback_data: 'cmd:searchhelp:user' }, { text: '📨 Email ID', callback_data: 'cmd:searchhelp:email' }],
-				[{ text: '🎟 Invite Code', callback_data: 'cmd:searchhelp:invite' }, { text: '🛡 Role', callback_data: 'cmd:searchhelp:role' }],
-				[{ text: '🧾 Event ID', callback_data: 'cmd:searchhelp:event' }, { text: '🔤 Keyword', callback_data: 'cmd:searchhelp:keyword' }],
-				[{ text: '🌐 IP Lookup', callback_data: 'cmd:whois:help' }],
-				[{ text: '🏠 Menu', callback_data: 'cmd:menu' }]
-			]
-		};
-	},
-
-	async sendSecurityEventAlert(c, title, detail = '', callbackData = 'cmd:security') {
-		const allowed = await this.parseAllowedChatIds(c);
-		if (!allowed.length) return;
-		const tgBotToken = await this.getBotToken(c);
-		if (!tgBotToken) return;
-		const text = `🚨 <b>Security Event</b>\n${title}${detail ? `\n${detail}` : ''}`;
-		const replyMarkup = { inline_keyboard: [[{ text: '🔐 Open Security', callback_data: callbackData }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
-		await Promise.all(allowed.map(async chatId => {
-			const payload = { chat_id: chatId, parse_mode: 'HTML', text, reply_markup: replyMarkup };
-			await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(payload)
-			});
-		}));
 	},
 
 	// ─── COMMAND FORMATTERS ───────────────────────────────────────────────────
 
 	formatSearchHelp(scope = 'general') {
-		if (scope === 'user') return `🔎 <b>/search user</b>\nExample:\n• <code>/search user 2</code>\n• <code>/search user user@example.com</code>\n• <code>/search user user@example.com/2</code>`;
+		if (scope === 'user') return `🔎 <b>/search user</b>\nExamples:\n• <code>/search user 2</code>\n• <code>/search user user@example.com</code>\n• <code>/search user user@example.com/2</code>`;
 		if (scope === 'email') return `🔎 <b>/search email</b>\nExample: <code>/search email 121</code>`;
-		if (scope === 'invite') return `🔎 <b>/search invite</b>\nExample:\n• <code>/search invite 6</code>\n• <code>/search invite CODE123</code>`;
-		if (scope === 'role') return `🔎 <b>/search role</b>\nExample:\n• <code>/search role 1</code>\n• <code>/search role normal users</code>`;
+		if (scope === 'invite') return `🔎 <b>/search invite</b>\nExamples:\n• <code>/search invite 6</code>\n• <code>/search invite CODE123</code>`;
+		if (scope === 'role') return `🔎 <b>/search role</b>\nExamples:\n• <code>/search role 1</code>\n• <code>/search role admin</code>`;
 		if (scope === 'event') return `🔎 <b>/search event</b>\nExample: <code>/search event 128</code>`;
 		if (scope === 'keyword') return `🔎 <b>/search keyword</b>\nExample: <code>/search keyword delete</code>`;
-		return `🔎 <b>/search</b>\nUse menu or command:\n• <code>/search user &lt;userId|email&gt;</code>\n• <code>/search email &lt;emailId&gt;</code>\n• <code>/search invite &lt;id|code&gt;</code>\n• <code>/search role &lt;id|name&gt;</code>\n• <code>/search event &lt;eventId&gt;</code>\n• <code>/search keyword &lt;text&gt;</code>\n• <code>/search ip &lt;ip&gt;</code>`;
+		return `🔎 <b>/search</b>\nUse menu buttons or commands:\n• <code>/search user &lt;userId|email&gt;</code>\n• <code>/search email &lt;emailId&gt;</code>\n• <code>/search invite &lt;id|code&gt;</code>\n• <code>/search role &lt;id|name&gt;</code>\n• <code>/search event &lt;eventId&gt;</code>\n• <code>/search keyword &lt;text&gt;</code>\n• <code>/search ip &lt;ip&gt;</code>`;
 	},
 
 	async queryRecentActivity(c, { userId = null, address = null, accountId = null, ip = null }, limit = 5) {
@@ -886,7 +877,7 @@ Blocked at: ${row.createTime} UTC<br>
 	},
 
 	formatActivityBlock(items = []) {
-		if (!items.length) return 'Recent activity: -';
+		if (!items.length) return 'No recent activity.';
 		const lines = items.map(item => {
 			const oneLine = String(item.message || '').split('\n').find(Boolean) || '-';
 			return `• #${item.logId} [${item.level}] ${item.eventType} | ${item.createTime}\n  ${oneLine.slice(0, 140)}`;
@@ -907,15 +898,14 @@ Blocked at: ${row.createTime} UTC<br>
 		const userId = Number(userIdArg || 0);
 		const backPage = Math.max(1, Number(pageArg || 1));
 		if (!userId) {
-			return { text: `👤 <b>/user</b>\nUsage: <code>/user 2</code>`, replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: 'cmd:users:1' }) };
+			return { text: `👤 <b>User Detail</b>\nUsage: <code>/user 2</code>`, replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: 'cmd:users:1' }) };
 		}
 		const userRow = await orm(c).select().from(user).where(eq(user.userId, userId)).get();
 		if (!userRow) {
-			return { text: `👤 <b>/user</b>\nUser #${userId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: `cmd:users:${backPage}` }) };
+			return { text: `👤 <b>User Detail</b>\nUser #${userId} not found.`, replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: `cmd:users:${backPage}` }) };
 		}
 
 		const isAdmin = this.isAdminUser(c, userRow.email);
-
 		const roleRows = await orm(c).select().from(role);
 		const roleMap = new Map(roleRows.map(r => [r.roleId, r.name]));
 
@@ -975,7 +965,7 @@ Blocked at: ${row.createTime} UTC<br>
 		const relatedAccounts = relatedAccountsRows?.results || [];
 		const activeAccounts = relatedAccounts.filter(a => !a.isDel);
 		const accountText = relatedAccounts.length
-			? relatedAccounts.map(item => `• ${item.isDel ? '❌' : '✅'} account_id ${item.accountId}: ${item.email}`).join('\n')
+			? relatedAccounts.map(item => `• ${item.isDel ? '❌' : '✅'} #${item.accountId}: ${item.email}`).join('\n')
 			: '-';
 
 		let addressQuotaLine = '';
@@ -994,7 +984,7 @@ Blocked at: ${row.createTime} UTC<br>
 		const sec = ipDetail?.security || {};
 		const loc = ipDetail?.location || {};
 		const ipLine = userRow.activeIp
-			? `📍 IP: <code>${userRow.activeIp}</code> | vpn=${sec.vpn ? 'Y' : 'N'} proxy=${sec.proxy ? 'Y' : 'N'} tor=${sec.tor ? 'Y' : 'N'}\n🗺️ Loc: ${loc.city || '-'}, ${loc.country || '-'}`
+			? `📍 IP: <code>${userRow.activeIp}</code> | vpn=${sec.vpn ? 'Y' : 'N'} proxy=${sec.proxy ? 'Y' : 'N'} tor=${sec.tor ? 'Y' : 'N'}\n🗺️ Location: ${loc.city || '-'}, ${loc.country || '-'}`
 			: `📍 IP: -`;
 
 		const recent = await this.queryRecentActivity(c, { userId: userRow.userId, address: userRow.email, accountId: highlightAccount || null, ip: userRow.activeIp }, 5);
@@ -1002,7 +992,7 @@ Blocked at: ${row.createTime} UTC<br>
 
 		const detail = `👤 <b>User Detail</b>
 
-🆔 User: #${userRow.userId} <code>${userRow.email}</code>
+🆔 ID: #${userRow.userId} <code>${userRow.email}</code>
 ${isAdmin ? '👑' : '🛡️'} Role: <b>${roleName}</b>
 📊 Status: ${this.mapUserStatusLabel(userRow.status)} | Deleted: ${userRow.isDel ? 'Yes' : 'No'}
 
@@ -1015,9 +1005,9 @@ ${addressQuotaLine}
 <b>📧 Email Stats</b>
 📥 Received: ${totalReceiveEmails} | 📤 Sent: ${totalSendEmails}
 
-<b>📬 Accounts</b>
+<b>📬 Addresses</b>
 ${accountText}
-${highlightAccount ? `\n🎯 Highlighted: account_id ${highlightAccount}` : ''}
+${highlightAccount ? `\n🎯 Highlighted: account #${highlightAccount}` : ''}
 <b>🌐 Network</b>
 ${ipLine}
 📱 Device: ${userRow.device || '-'} / ${userRow.os || '-'}
@@ -1029,7 +1019,14 @@ ${ipLine}
 
 ${this.formatActivityBlock(recent)}`;
 
-		const replyMarkup = { inline_keyboard: [...eventButtons, [{ text: '📧 View Emails', callback_data: `cmd:usermail:${userRow.userId}:1` }], [{ text: '👥 Users List', callback_data: `cmd:users:${backPage}` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		const replyMarkup = {
+			inline_keyboard: [
+				...eventButtons,
+				[{ text: '📧 View Emails', callback_data: `cmd:usermail:${userRow.userId}:1` }],
+				[{ text: '🔄 Reset Quota', callback_data: `cmd:resetquota:${userRow.userId}` }],
+				[{ text: '⬅️ Users List', callback_data: `cmd:users:${backPage}` }, { text: '🛠️ Admin', callback_data: 'cmd:admin' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]
+			]
+		};
 		return { text: detail, replyMarkup };
 	},
 
@@ -1054,7 +1051,7 @@ ${this.formatActivityBlock(recent)}`;
 			sendCount: user.sendCount,
 			createTime: user.createTime,
 		}).from(user).orderBy(desc(user.userId)).limit(pageSize + 1).offset((currentPage - 1) * pageSize);
-		if (rows.length === 0) return { text: `👤 <b>/users</b>\nNo user data.`, replyMarkup: this.buildMainMenu() };
+		if (rows.length === 0) return { text: `👥 <b>Users</b>\nNo users found.`, replyMarkup: this.buildAdminMenu() };
 
 		const hasNext = rows.length > pageSize;
 		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
@@ -1104,9 +1101,9 @@ ${this.formatActivityBlock(recent)}`;
 
 			bodyParts.push(`🆔 <code>${item.userId}</code> ${item.email}
 ${isAdmin ? '👑' : '🛡️'} Role: ${roleDisplay} | Status: ${this.mapUserStatusLabel(item.status)}
-📤 Send: ${item.sendCount || 0} used | Limit: ${sendLimit}
+📤 Send used: ${item.sendCount || 0} | Limit: ${sendLimit}
 📬 Address Limit: ${addressLimit}
-📥 Receive: ${receiveCountMap.get(item.userId) || 0} | 📤 Send total: ${sendCountMap.get(item.userId) || 0}
+📥 Recv: ${receiveCountMap.get(item.userId) || 0} | 📤 Sent: ${sendCountMap.get(item.userId) || 0}
 📍 IP: <code>${item.activeIp || '-'}</code> vpn=${sec.vpn ? 'Y' : 'N'} | ${loc.city || '-'}, ${loc.country || '-'}
 🗓️ Created: ${item.createTime || '-'}`);
 		}
@@ -1115,16 +1112,16 @@ ${isAdmin ? '👑' : '🛡️'} Role: ${roleDisplay} | Status: ${this.mapUserSta
 			{ text: `👤 #${item.userId} ${item.email}`.slice(0, 40), callback_data: `cmd:userid:${item.userId}:${currentPage}` },
 			{ text: '📧', callback_data: `cmd:usermail:${item.userId}:1` }
 		]));
-		const pagerMarkup = this.buildPager('users', currentPage, hasNext);
+		const pagerMarkup = this.buildPager('users', currentPage, hasNext, 'cmd:admin');
 		const replyMarkup = { inline_keyboard: [...userButtons, ...(pagerMarkup?.inline_keyboard || [])] };
-		return { text: `👥 <b>/users</b> (page ${currentPage})\n\n${bodyParts.join('\n\n')}`, replyMarkup };
+		return { text: `👥 <b>Users</b> (page ${currentPage})\n\n${bodyParts.join('\n\n')}`, replyMarkup };
 	},
 
 	// ─── ENHANCED COMMAND: ROLE LIST ─────────────────────────────────────────
 
 	async formatRoleCommand(c) {
 		const rows = await orm(c).select().from(role);
-		if (rows.length === 0) return `🛡️ <b>/role</b>\nNo role data.`;
+		if (rows.length === 0) return `🛡️ <b>Roles</b>\nNo roles found.`;
 		const roleRows = await Promise.all(rows.map(async item => this.attachRolePermInfo(c, { ...item })));
 
 		const roleIds = rows.map(r => r.roleId);
@@ -1143,12 +1140,12 @@ ${isAdmin ? '👑' : '🛡️'} Role: ${roleDisplay} | Status: ${this.mapUserSta
 👥 Users: ${userCount}
 📤 Send Limit: ${sendLimit}
 📬 Address Limit: ${addressLimit}
-✉️ Perm send: ${item.canSendEmail ? 'Yes' : 'No'} | add-address: ${item.canAddAddress ? 'Yes' : 'No'}
-🚫 Ban email: ${item.banEmail || '-'}
-🌐 Avail domain: ${item.availDomain || 'All'}`;
+✉️ Can send: ${item.canSendEmail ? 'Yes' : 'No'} | Can add address: ${item.canAddAddress ? 'Yes' : 'No'}
+🚫 Banned email: ${item.banEmail || '-'}
+🌐 Available domain: ${item.availDomain || 'All'}`;
 		}).join('\n\n');
 
-		return `🛡️ <b>/role</b>\n\n${body}`;
+		return `🛡️ <b>Roles</b>\n\n${body}`;
 	},
 
 	// ─── ENHANCED COMMAND: STATUS ─────────────────────────────────────────────
@@ -1165,16 +1162,16 @@ ${isAdmin ? '👑' : '🛡️'} Role: ${roleDisplay} | Status: ${this.mapUserSta
 		const healthIcon = this.severityLabel(metrics.systemError24h + metrics.failed24h, 3, 10);
 		const securityIcon = this.severityLabel(metrics.failed24h + metrics.blocked24h, 4, 12);
 
-		return `📊 <b>/status</b> — Main Dashboard
+		return `📊 <b>Dashboard</b>
 
 <b>${healthIcon} Platform Health (24h)</b>
-Failed login: <b>${metrics.failed24h}</b> | System error: <b>${metrics.systemError24h}</b>
-Blocked email event: <b>${metrics.blocked24h}</b>
+Failed login: <b>${metrics.failed24h}</b> | System errors: <b>${metrics.systemError24h}</b>
+Blocked email events: <b>${metrics.blocked24h}</b>
 
-<b>${securityIcon} Security & Bot Runtime</b>
+<b>${securityIcon} Security &amp; Bot Runtime</b>
 🤖 Bot enabled: ${metrics.botEnabled ? 'Yes' : 'No'}
 🌐 Push notify: ${metrics.pushEnabled ? 'Yes' : 'No'}
-🔐 Allowed CHAT_ID: ${metrics.allowed.length > 0 ? metrics.allowed.join(', ') : '(empty)'}
+🔐 Allowed Chat IDs: ${metrics.allowed.length > 0 ? metrics.allowed.join(', ') : '(empty)'}
 
 <b>👥 Users</b>
 Total: ${metrics.numberCount.userTotal} | Deleted: ${deletedUserRow?.cnt || 0} | New today: ${todayRegRow?.cnt || 0}
@@ -1186,9 +1183,7 @@ Total: ${metrics.numberCount.accountTotal}
 Received: ${metrics.numberCount.receiveTotal} | Sent: ${metrics.numberCount.sendTotal}
 Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 
-📅 Server time (UTC): ${metrics.nowUtc}
-
-Tip: gunakan <code>/security</code> untuk detail insiden dan <code>/system</code> untuk detail webhook/log.`;
+📅 Server time (UTC): ${metrics.nowUtc}`;
 	},
 
 	// ─── ENHANCED COMMAND: SECURITY ──────────────────────────────────────────
@@ -1211,14 +1206,14 @@ Tip: gunakan <code>/security</code> untuk detail insiden dan <code>/system</code
 			LIMIT 10
 		`).all();
 
-		let riskyLines = 'No risky IP found in cache.';
+		let riskyLines = 'No risky IPs found in cache.';
 		if (results?.length) {
 			riskyLines = results.map((row, idx) => {
 				let detail = {};
 				try { detail = JSON.parse(row.data || '{}'); } catch (_) {}
 				const sec = detail.security || {};
 				const location = detail.location || {};
-				return `${idx + 1}. <code>${row.ip || '-'}</code> users=${row.affectedUsers || 0}\n   🧷 vpn=${sec.vpn ? 'Y' : 'N'} proxy=${sec.proxy ? 'Y' : 'N'} tor=${sec.tor ? 'Y' : 'N'} relay=${sec.relay ? 'Y' : 'N'}\n   📍 ${location.country || '-'} / ${location.city || '-'} | Updated: ${row.update_time || '-'}`;
+				return `${idx + 1}. <code>${row.ip || '-'}</code> users=${row.affectedUsers || 0}\n   vpn=${sec.vpn ? 'Y' : 'N'} proxy=${sec.proxy ? 'Y' : 'N'} tor=${sec.tor ? 'Y' : 'N'} relay=${sec.relay ? 'Y' : 'N'}\n   📍 ${location.country || '-'} / ${location.city || '-'} | Updated: ${row.update_time || '-'}`;
 			}).join('\n');
 		}
 
@@ -1287,16 +1282,16 @@ Tip: gunakan <code>/security</code> untuk detail insiden dan <code>/system</code
 
 		const replyMarkup = {
 			inline_keyboard: [
-				[{ text: '📊 Status', callback_data: 'cmd:status' }, { text: '🗂 Full Events', callback_data: 'cmd:events:1' }],
+				[{ text: '📊 Status', callback_data: 'cmd:status' }, { text: '🗂 All Events', callback_data: 'cmd:events:1' }],
 				...securityButtons,
 				...blacklistButtons,
 				[{ text: '🚫 Blacklist Rules', callback_data: 'cmd:blacklist' }, { text: '🔑 Keyword Rules', callback_data: 'cmd:keyword' }],
-				[{ text: '🏠 Menu', callback_data: 'cmd:menu' }]
+				[{ text: '⬅️ Back to Menu', callback_data: 'cmd:menu' }]
 			]
 		};
 
 		return {
-			text: `🔐 <b>/security dashboard</b>\n\n${summary}\n\n<b>⚠️ Risky IPs (cache)</b>\n${riskyLines}\n\n<b>🔒 Failed login events (latest)</b>\n${failedPreview}\n\n<b>🚫 Blocked email logs (important)</b>\n${blacklistPreview}\n\nTip: tap an event button or run <code>/security event &lt;id&gt;</code> for full detail.`,
+			text: `🔐 <b>Security Dashboard</b>\n\n${summary}\n\n<b>⚠️ Risky IPs (cached)</b>\n${riskyLines}\n\n<b>🔒 Failed Login Events (latest)</b>\n${failedPreview}\n\n<b>🚫 Blocked Email Logs</b>\n${blacklistPreview}`,
 			replyMarkup
 		};
 	},
@@ -1305,24 +1300,31 @@ Tip: gunakan <code>/security</code> untuk detail insiden dan <code>/system</code
 		return await this.formatEventDetailCommand(c, eventIdArg, { fromSecurity: true });
 	},
 
-	// ─── NEW COMMAND: BAN USER ────────────────────────────────────────────────
+	// ─── COMMAND: BAN USER ────────────────────────────────────────────────────
 
 	async formatBanUserCommand(c, userIdArg, action = 'ban') {
 		const userId = Number(userIdArg || 0);
-		if (!userId) return { text: `🚫 Usage: <code>/admin user ban &lt;userId&gt;</code> or <code>/admin user unban &lt;userId&gt;</code>`, replyMarkup: this.buildMainMenu() };
+		if (!userId) return { text: `🚫 Usage: <code>/admin user ban &lt;userId&gt;</code> or <code>/admin user unban &lt;userId&gt;</code>`, replyMarkup: this.buildAdminMenu() };
 
 		const userRow = await c.env.db.prepare('SELECT user_id as userId, email, status, is_del as isDel FROM user WHERE user_id = ?').bind(userId).first();
-		if (!userRow) return { text: `🚫 User #${userId} not found.`, replyMarkup: this.buildMainMenu() };
+		if (!userRow) return { text: `🚫 User #${userId} not found.`, replyMarkup: this.buildAdminMenu() };
 
 		if (this.isAdminUser(c, userRow.email)) {
-			return { text: `🚫 Cannot ban admin user.`, replyMarkup: this.buildMainMenu() };
+			return { text: `🚫 Cannot ban admin user.`, replyMarkup: this.buildAdminMenu() };
 		}
 
 		const newStatus = action === 'ban' ? 1 : 0;
 		await c.env.db.prepare('UPDATE user SET status = ? WHERE user_id = ?').bind(newStatus, userId).run();
 
 		const actionText = action === 'ban' ? '🚫 Banned' : '✅ Unbanned';
-		return { text: `${actionText} user #${userId} <code>${userRow.email}</code>`, replyMarkup: this.buildMainMenu() };
+		return {
+			text: `${actionText} user #${userId} <code>${userRow.email}</code>`,
+			replyMarkup: this.buildDetailMenu({
+				backText: '👤 View User',
+				backCallbackData: `cmd:userid:${userId}:1`,
+				extraButtons: [{ text: '👥 Users List', callback_data: 'cmd:admin:user:list:1' }]
+			})
+		};
 	},
 
 	// ─── WHOIS COMMAND ────────────────────────────────────────────────────────
@@ -1330,7 +1332,10 @@ Tip: gunakan <code>/security</code> untuk detail insiden dan <code>/system</code
 	async formatWhoisCommand(c, ipArg) {
 		const ip = String(ipArg || '').trim();
 		if (!ip || ip === 'help') {
-			return { text: `🌐 <b>/whois</b>\nUsage: <code>/whois 1.1.1.1</code>`, replyMarkup: this.buildMainMenu() };
+			return {
+				text: `🌐 <b>IP Lookup</b>\nUsage: <code>/search ip 1.1.1.1</code>`,
+				replyMarkup: this.buildMainMenu()
+			};
 		}
 		const detail = await this.queryIpSecurity(c, ip, { noCache: true });
 		const sec = detail?.security || {};
@@ -1345,19 +1350,19 @@ Tip: gunakan <code>/security</code> untuk detail insiden dan <code>/system</code
 			LIMIT 10
 		`).bind(ip, ip).all();
 		const relatedUsers = relatedUsersRows?.results || [];
-		const userLines = relatedUsers.map(item => `• #${item.userId} ${item.email} | status=${item.status} | active=${item.activeIp || '-'} create=${item.createIp || '-'}`).join('\n');
+		const userLines = relatedUsers.map(item => `• #${item.userId} ${item.email} | status=${this.mapUserStatusLabel(item.status)} | active=${item.activeIp || '-'} create=${item.createIp || '-'}`).join('\n');
 
 		return {
-			text: `🌐 <b>/whois ${ip}</b>
+			text: `🌐 <b>IP Lookup: ${this.escapeHtml(ip)}</b>
 
-🛡️ VPN/Proxy/Tor/Relay: ${sec.vpn ? '✅' : '❌'}/${sec.proxy ? '✅' : '❌'}/${sec.tor ? '✅' : '❌'}/${sec.relay ? '✅' : '❌'}
+🛡️ VPN: ${sec.vpn ? '✅' : '❌'} | Proxy: ${sec.proxy ? '✅' : '❌'} | Tor: ${sec.tor ? '✅' : '❌'} | Relay: ${sec.relay ? '✅' : '❌'}
 🏙️ Location: ${loc.city || '-'}, ${loc.region || '-'}, ${loc.country || '-'} (${loc.country_code || '-'})
 🏢 ASN Org: ${net.autonomous_system_organization || '-'}
 🔢 ASN: ${net.autonomous_system_number || '-'}
 
-👥 <b>Accounts with this IP</b>
-${userLines || '-'}`,
-			replyMarkup: this.buildMainMenu()
+👥 <b>Users with this IP</b>
+${userLines || 'None found.'}`,
+			replyMarkup: this.buildDetailMenu({ backText: '🔎 Search', backCallbackData: 'cmd:search' })
 		};
 	},
 
@@ -1392,16 +1397,21 @@ ${userLines || '-'}`,
 		}
 
 		return {
-			text: `📈 <b>/stats ${days}d</b>
+			text: `📈 <b>Stats (last ${days}d)</b>
 
 <b>Totals</b>
 👤 New users: ${regTotal}
 📥 Received: ${recvTotal}
 📤 Sent: ${sendTotal}
 
-<b>Daily (U=users R=receive S=send)</b>
+<b>Daily breakdown</b>
 ${lines.join('\n')}`,
-			replyMarkup: { inline_keyboard: [[{ text: '🏆 Top Users', callback_data: 'cmd:stats:top' }, { text: '📉 Bounce/Fail', callback_data: 'cmd:stats:bounce' }], [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			replyMarkup: {
+				inline_keyboard: [
+					[{ text: '🏆 Top Users', callback_data: 'cmd:stats:top' }, { text: '📉 Bounce/Fail', callback_data: 'cmd:stats:bounce' }],
+					[{ text: '⬅️ Back to Menu', callback_data: 'cmd:menu' }]
+				]
+			}
 		};
 	},
 
@@ -1418,7 +1428,7 @@ ${lines.join('\n')}`,
 				LIMIT ? OFFSET ?
 			`).bind(pageSize + 1, (currentPage - 1) * pageSize).all();
 			const items = rows.results || [];
-			if (!items.length) return { text: `🗂 <b>/events</b>\nNo webhook event logs yet.`, replyMarkup: this.buildMainMenu() };
+			if (!items.length) return { text: `🗂 <b>Events</b>\nNo webhook event logs yet.`, replyMarkup: this.buildMainMenu() };
 
 			const hasNext = items.length > pageSize;
 			const visible = hasNext ? items.slice(0, pageSize) : items;
@@ -1430,11 +1440,11 @@ ${lines.join('\n')}`,
 			}).join('\n\n');
 
 			const eventButtons = visible.map(item => [{ text: `🧾 #${item.logId} ${item.eventType}`, callback_data: `cmd:event:${item.logId}:${currentPage}` }]);
-			const pagerMarkup = this.buildPager('events', currentPage, hasNext);
+			const pagerMarkup = this.buildPager('events', currentPage, hasNext, 'cmd:menu');
 			const replyMarkup = { inline_keyboard: [...eventButtons, ...(pagerMarkup?.inline_keyboard || [])] };
-			return { text: `🗂 <b>/events</b> (page ${currentPage})\n\n${body}`, replyMarkup };
+			return { text: `🗂 <b>Events</b> (page ${currentPage})\n\n${body}`, replyMarkup };
 		} catch (e) {
-			return { text: `🗂 <b>/events</b>\nError: ${e.message}`, replyMarkup: this.buildMainMenu() };
+			return { text: `🗂 <b>Events</b>\nError: ${e.message}`, replyMarkup: this.buildMainMenu() };
 		}
 	},
 
@@ -1442,10 +1452,10 @@ ${lines.join('\n')}`,
 		const logId = Number(idArg || 0);
 		const fromSecurity = Boolean(options?.fromSecurity);
 		const backPage = Math.max(1, Number(options?.backPage || 1));
-		const finalBackText = options?.backText || (fromSecurity ? '🔐 Security List' : '🗂 Events List');
+		const finalBackText = options?.backText || (fromSecurity ? '🔐 Security' : '🗂 Events');
 		const finalBackCallbackData = options?.backCallbackData || (fromSecurity ? 'cmd:security' : `cmd:events:${backPage}`);
 
-		if (!logId) return { text: `🧾 <b>/event</b>\nUsage: <code>/event 123</code>`, replyMarkup: this.buildDetailMenu({ backText: finalBackText, backCallbackData: finalBackCallbackData }) };
+		if (!logId) return { text: `🧾 <b>Event Detail</b>\nUsage: <code>/event 123</code>`, replyMarkup: this.buildDetailMenu({ backText: finalBackText, backCallbackData: finalBackCallbackData }) };
 
 		const row = await c.env.db.prepare(`
 			SELECT log_id as logId, event_type as eventType, level, message, meta, create_time as createTime
@@ -1457,7 +1467,7 @@ ${lines.join('\n')}`,
 		try { meta = row.meta ? JSON.parse(row.meta) : {}; } catch (_) {}
 		const previewUrl = meta?.webAppUrl;
 
-		const detail = `🧾 <b>/event ${row.logId}</b>
+		const detail = `🧾 <b>Event #${row.logId}</b>
 
 Type: ${row.eventType}
 Level: ${row.level}
@@ -1486,25 +1496,25 @@ Meta: <code>${JSON.stringify(meta || {}, null, 2).slice(0, 1200)}</code>`;
 			createTime: email.createTime,
 		}).from(email).orderBy(desc(email.emailId)).limit(pageSize + 1).offset((currentPage - 1) * pageSize);
 
-		if (rows.length === 0) return { text: `📭 <b>/mail</b>\nNo email data.`, replyMarkup: this.buildMainMenu() };
+		if (rows.length === 0) return { text: `📭 <b>Mail</b>\nNo email data.`, replyMarkup: this.buildMainMenu() };
 		const hasNext = rows.length > pageSize;
 		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
 		const body = visibleRows.map(item => `🆔 <code>${item.emailId}</code> | ${item.type === 0 ? '📥 RECV' : '📤 SEND'} | del=${item.isDel}
 From: <code>${item.sendEmail || '-'}</code>
 To: <code>${item.toEmail || '-'}</code>
-Subj: ${(item.subject || '-').slice(0, 60)}
+Subject: ${(item.subject || '-').slice(0, 60)}
 At: ${item.createTime}`).join('\n\n');
 
 		const mailButtons = visibleRows.map(item => [{ text: `✉️ #${item.emailId} ${(item.subject || '(no subject)').slice(0, 50)}`, callback_data: `cmd:mailid:${item.emailId}:${currentPage}` }]);
-		const pagerMarkup = this.buildPager('mail', currentPage, hasNext);
+		const pagerMarkup = this.buildPager('mail', currentPage, hasNext, 'cmd:menu');
 		const replyMarkup = { inline_keyboard: [...mailButtons, ...(pagerMarkup?.inline_keyboard || [])] };
-		return { text: `📨 <b>/mail</b> (page ${currentPage})\n\n${body}`, replyMarkup };
+		return { text: `📨 <b>Mail</b> (page ${currentPage})\n\n${body}`, replyMarkup };
 	},
 
 	async formatMailDetailCommand(c, emailIdArg, pageArg = 1) {
 		const emailId = Number(emailIdArg || 0);
 		const backPage = Math.max(1, Number(pageArg || 1));
-		if (!emailId) return { text: `📨 <b>/mail</b>\nUsage: <code>/mail 120</code>`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: 'cmd:mail:1' }) };
+		if (!emailId) return { text: `📨 <b>Mail Detail</b>\nUsage: <code>/mail 120</code>`, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: 'cmd:mail:1' }) };
 
 		const row = await c.env.db.prepare(`
 			SELECT email_id as emailId, send_email as sendEmail, to_email as toEmail,
@@ -1523,14 +1533,14 @@ At: ${item.createTime}`).join('\n\n');
 		const preview = (row.text || '').slice(0, 200);
 
 		const isDelLabel = row.isDel === 1
-			? '🗑️ Soft deleted (is_del=1) — hidden from user'
+			? '🗑️ Soft deleted'
 			: row.isDel === 2
-				? '💥 Hard deleted (is_del=2)'
-				: '✅ Active (not deleted)';
+				? '💥 Hard deleted'
+				: '✅ Active';
 
 		const detail = `📧 <b>Email #${row.emailId}</b>
 
-📥/📤 Type: ${row.type === 0 ? 'Received' : 'Sent'}
+${row.type === 0 ? '📥' : '📤'} Type: ${row.type === 0 ? 'Received' : 'Sent'}
 📊 Status: ${statusMap[row.status] || row.status}
 🗑️ Deleted: ${isDelLabel}
 
@@ -1543,45 +1553,51 @@ At: ${item.createTime}`).join('\n\n');
 💬 Preview:
 ${preview || '-'}`;
 
-		return { text: detail, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: `cmd:mail:${backPage}`, previewUrl: webAppUrl }) };
+		return {
+			text: detail,
+			replyMarkup: this.buildDetailMenu({
+				backText: '📨 Mail List',
+				backCallbackData: `cmd:mail:${backPage}`,
+				previewUrl: webAppUrl,
+				extraButtons: row.userId ? [{ text: `👤 View User #${row.userId}`, callback_data: `cmd:userid:${row.userId}:1` }] : []
+			})
+		};
 	},
 
 	async formatAdminCommand(c, args = []) {
 		const scope = String(args?.[0] || '').toLowerCase();
 		if (!scope) {
 			return {
-				text: `🛠️ <b>/admin Command Center</b>
+				text: `🛠️ <b>Admin Command Center</b>
 
-Gunakan command admin agar terorganisir:
-
-🎟️ Invite code
+🎟️ <b>Invite Codes</b>
 • <code>/admin invite list [page]</code>
 • <code>/admin invite create CODE ROLE_ID [COUNT] [YYYY-MM-DD HH:mm:ss]</code>
 • <code>/admin invite delete ID|CODE</code>
 • <code>/admin invite clear</code>
 
-👤 Akun user
+👤 <b>Users</b>
 • <code>/admin user list [page]</code>
 • <code>/admin user create email@domain.com password [roleId]</code>
 • <code>/admin user role USER_ID ROLE_ID</code>
 • <code>/admin user ban USER_ID</code> / <code>/admin user unban USER_ID</code>
 • <code>/admin user delete USER_ID</code>
 
-📮 Alamat email (account)
+📮 <b>Addresses</b>
 • <code>/admin account add USER_ID alias@domain.com</code>
 • <code>/admin account delete ACCOUNT_ID</code>
 
-📧 Email deletion
+📧 <b>Email Management</b>
 • <code>/admin email soft EMAIL_ID</code>
 • <code>/admin email hard EMAIL_ID</code>
-• <code>/admin email purge</code> (hapus semua soft-deleted)
+• <code>/admin email purge</code>
 
-🛡️ Role
+🛡️ <b>Roles</b>
 • <code>/admin role list</code>
 • <code>/admin role add NAME [sendType] [sendCount] [accountCount]</code>
 • <code>/admin role default ROLE_ID</code>
 • <code>/admin role delete ROLE_ID</code>`,
-				replyMarkup: this.buildAdminShortcutMenu()
+				replyMarkup: this.buildAdminMenu()
 			};
 		}
 
@@ -1593,24 +1609,33 @@ Gunakan command admin agar terorganisir:
 				const roleId = Number(args?.[3] || 0);
 				const count = Number(args?.[4] || 1);
 				const expireTime = String(args?.[5] || '').trim();
-				if (!code || !roleId) return { text: 'Usage: <code>/admin invite create CODE ROLE_ID [COUNT] [YYYY-MM-DD HH:mm:ss]</code>', replyMarkup: this.buildMainMenu() };
+				if (!code || !roleId) return { text: 'Usage: <code>/admin invite create CODE ROLE_ID [COUNT] [YYYY-MM-DD HH:mm:ss]</code>', replyMarkup: this.buildAdminMenu() };
 				try {
 					await c.env.db.prepare('INSERT INTO reg_key (code, count, role_id, create_time, expire_time) VALUES (?, ?, ?, datetime("now"), ?)').bind(code, Math.max(1, count), roleId, expireTime || null).run();
-					return { text: `✅ Invite dibuat: <code>${this.escapeHtml(code)}</code> (role ${roleId}, count ${Math.max(1, count)})`, replyMarkup: this.buildMainMenu() };
+					return {
+						text: `✅ Invite created: <code>${this.escapeHtml(code)}</code>\nRole: ${roleId} | Uses: ${Math.max(1, count)}`,
+						replyMarkup: this.buildDetailMenu({ backText: '🎟️ Invite List', backCallbackData: 'cmd:admin:invite:list:1' })
+					};
 				} catch (e) {
-					return { text: `❌ Gagal create invite: ${this.escapeHtml(e.message)}`, replyMarkup: this.buildMainMenu() };
+					return { text: `❌ Failed to create invite: ${this.escapeHtml(e.message)}`, replyMarkup: this.buildAdminMenu() };
 				}
 			}
 			if (sub === 'delete') {
 				const target = String(args?.[2] || '').trim();
-				if (!target) return { text: 'Usage: <code>/admin invite delete ID|CODE</code>', replyMarkup: this.buildMainMenu() };
-				if (/^\d+$/.test(target)) await c.env.db.prepare('DELETE FROM reg_key WHERE rege_key_id = ?').bind(Number(target)).run();
+				if (!target) return { text: 'Usage: <code>/admin invite delete ID|CODE</code>', replyMarkup: this.buildAdminMenu() };
+				if (/^\d+$/.test(target)) await c.env.db.prepare('DELETE FROM reg_key WHERE reg_key_id = ?').bind(Number(target)).run();
 				else await c.env.db.prepare('DELETE FROM reg_key WHERE code = ? COLLATE NOCASE').bind(target).run();
-				return { text: `✅ Invite target <code>${this.escapeHtml(target)}</code> dihapus.`, replyMarkup: this.buildMainMenu() };
+				return {
+					text: `✅ Invite <code>${this.escapeHtml(target)}</code> deleted.`,
+					replyMarkup: this.buildDetailMenu({ backText: '🎟️ Invite List', backCallbackData: 'cmd:admin:invite:list:1' })
+				};
 			}
 			if (sub === 'clear') {
 				await c.env.db.prepare('DELETE FROM reg_key WHERE user_id = 0').run();
-				return { text: '✅ Semua invite yang belum dipakai sudah dihapus.', replyMarkup: this.buildMainMenu() };
+				return {
+					text: '✅ Unused invites cleared.',
+					replyMarkup: this.buildDetailMenu({ backText: '🎟️ Invite List', backCallbackData: 'cmd:admin:invite:list:1' })
+				};
 			}
 		}
 
@@ -1621,106 +1646,155 @@ Gunakan command admin agar terorganisir:
 				const emailAddr = String(args?.[2] || '').trim().toLowerCase();
 				const password = String(args?.[3] || '');
 				const roleId = Number(args?.[4] || 1);
-				if (!emailAddr || !password) return { text: 'Usage: <code>/admin user create email@domain.com password [roleId]</code>', replyMarkup: this.buildMainMenu() };
+				if (!emailAddr || !password) return { text: 'Usage: <code>/admin user create email@domain.com password [roleId]</code>', replyMarkup: this.buildAdminMenu() };
 				const exists = await c.env.db.prepare('SELECT user_id as userId FROM user WHERE email = ? COLLATE NOCASE LIMIT 1').bind(emailAddr).first();
-				if (exists) return { text: `⚠️ User sudah ada: <code>${this.escapeHtml(emailAddr)}</code>`, replyMarkup: this.buildMainMenu() };
+				if (exists) return { text: `⚠️ User already exists: <code>${this.escapeHtml(emailAddr)}</code>`, replyMarkup: this.buildAdminMenu() };
 				const { salt, hash } = await cryptoUtils.hashPassword(password);
 				const created = await c.env.db.prepare('INSERT INTO user (email, password, salt, type, status, create_time, is_del) VALUES (?, ?, ?, ?, 0, datetime("now"), 0) RETURNING user_id as userId').bind(emailAddr, hash, salt, roleId).first();
-				return { text: `✅ User dibuat: #${created?.userId || '-'} <code>${this.escapeHtml(emailAddr)}</code> role=${roleId}`, replyMarkup: this.buildMainMenu() };
+				return {
+					text: `✅ User created: #${created?.userId || '-'} <code>${this.escapeHtml(emailAddr)}</code> role=${roleId}`,
+					replyMarkup: this.buildDetailMenu({
+						backText: '👥 Users List',
+						backCallbackData: 'cmd:admin:user:list:1',
+						extraButtons: created?.userId ? [{ text: `👤 View User #${created.userId}`, callback_data: `cmd:userid:${created.userId}:1` }] : []
+					})
+				};
 			}
 			if (sub === 'role') {
 				const userId = Number(args?.[2] || 0);
 				const roleId = Number(args?.[3] || 0);
-				if (!userId || !roleId) return { text: 'Usage: <code>/admin user role USER_ID ROLE_ID</code>', replyMarkup: this.buildMainMenu() };
+				if (!userId || !roleId) return { text: 'Usage: <code>/admin user role USER_ID ROLE_ID</code>', replyMarkup: this.buildAdminMenu() };
 				await c.env.db.prepare('UPDATE user SET type = ? WHERE user_id = ?').bind(roleId, userId).run();
-				return { text: `✅ Role user #${userId} diubah ke role #${roleId}.`, replyMarkup: this.buildMainMenu() };
+				return {
+					text: `✅ User #${userId} role changed to #${roleId}.`,
+					replyMarkup: this.buildDetailMenu({
+						backText: '👤 View User',
+						backCallbackData: `cmd:userid:${userId}:1`,
+						extraButtons: [{ text: '👥 Users List', callback_data: 'cmd:admin:user:list:1' }]
+					})
+				};
 			}
 			if (sub === 'ban' || sub === 'unban') return await this.formatBanUserCommand(c, args?.[2], sub === 'ban' ? 'ban' : 'unban');
 			if (sub === 'delete') {
 				const userId = Number(args?.[2] || 0);
-				if (!userId) return { text: 'Usage: <code>/admin user delete USER_ID</code>', replyMarkup: this.buildMainMenu() };
+				if (!userId) return { text: 'Usage: <code>/admin user delete USER_ID</code>', replyMarkup: this.buildAdminMenu() };
 				await c.env.db.batch([
 					c.env.db.prepare('UPDATE user SET is_del = 1 WHERE user_id = ?').bind(userId),
 					c.env.db.prepare('UPDATE account SET is_del = 1 WHERE user_id = ?').bind(userId),
 					c.env.db.prepare('UPDATE email SET is_del = 1 WHERE user_id = ?').bind(userId)
 				]);
-				return { text: `✅ User #${userId} soft-deleted (termasuk account & email).`, replyMarkup: this.buildMainMenu() };
+				return {
+					text: `✅ User #${userId} soft-deleted (accounts &amp; emails included).`,
+					replyMarkup: this.buildDetailMenu({ backText: '👥 Users List', backCallbackData: 'cmd:admin:user:list:1' })
+				};
 			}
 		}
 
 		if (scope === 'account') {
 			const sub = String(args?.[1] || '').toLowerCase();
-			if (!sub || sub === 'help') return { text: `📬 <b>/admin account</b>\n\n• <code>/admin account add USER_ID alias@domain.com</code>\n• <code>/admin account delete ACCOUNT_ID</code>`, replyMarkup: this.buildAdminShortcutMenu() };
+			if (!sub || sub === 'help') return { text: `📬 <b>Address Management</b>\n\n• <code>/admin account add USER_ID alias@domain.com</code>\n• <code>/admin account delete ACCOUNT_ID</code>`, replyMarkup: this.buildAdminMenu() };
 			if (sub === 'add') {
 				const userId = Number(args?.[2] || 0);
 				const emailAddr = String(args?.[3] || '').trim().toLowerCase();
-				if (!userId || !emailAddr) return { text: 'Usage: <code>/admin account add USER_ID alias@domain.com</code>', replyMarkup: this.buildMainMenu() };
+				if (!userId || !emailAddr) return { text: 'Usage: <code>/admin account add USER_ID alias@domain.com</code>', replyMarkup: this.buildAdminMenu() };
 				const exists = await c.env.db.prepare('SELECT account_id FROM account WHERE email = ? COLLATE NOCASE LIMIT 1').bind(emailAddr).first();
-				if (exists) return { text: `⚠️ Address sudah ada: <code>${this.escapeHtml(emailAddr)}</code>`, replyMarkup: this.buildMainMenu() };
+				if (exists) return { text: `⚠️ Address already exists: <code>${this.escapeHtml(emailAddr)}</code>`, replyMarkup: this.buildAdminMenu() };
 				await c.env.db.prepare('INSERT INTO account (email, name, status, user_id, create_time, is_del) VALUES (?, ?, 0, ?, datetime("now"), 0)').bind(emailAddr, emailAddr.split('@')[0], userId).run();
-				return { text: `✅ Address ditambahkan ke user #${userId}: <code>${this.escapeHtml(emailAddr)}</code>`, replyMarkup: this.buildMainMenu() };
+				return {
+					text: `✅ Address added to user #${userId}: <code>${this.escapeHtml(emailAddr)}</code>`,
+					replyMarkup: this.buildDetailMenu({
+						backText: '👤 View User',
+						backCallbackData: `cmd:userid:${userId}:1`,
+						extraButtons: [{ text: '🛠️ Admin', callback_data: 'cmd:admin' }]
+					})
+				};
 			}
 			if (sub === 'delete') {
 				const accountId = Number(args?.[2] || 0);
-				if (!accountId) return { text: 'Usage: <code>/admin account delete ACCOUNT_ID</code>', replyMarkup: this.buildMainMenu() };
+				if (!accountId) return { text: 'Usage: <code>/admin account delete ACCOUNT_ID</code>', replyMarkup: this.buildAdminMenu() };
 				await c.env.db.prepare('UPDATE account SET is_del = 1 WHERE account_id = ?').bind(accountId).run();
-				return { text: `✅ Account #${accountId} soft-deleted.`, replyMarkup: this.buildMainMenu() };
+				return {
+					text: `✅ Account #${accountId} soft-deleted.`,
+					replyMarkup: this.buildDetailMenu({ backText: '🛠️ Admin', backCallbackData: 'cmd:admin' })
+				};
 			}
 		}
 
 		if (scope === 'email') {
 			const sub = String(args?.[1] || '').toLowerCase();
-			if (!sub || sub === 'help') return { text: `📧 <b>/admin email</b>\n\n• <code>/admin email soft EMAIL_ID</code>\n• <code>/admin email hard EMAIL_ID</code>\n• <code>/admin email purge</code>`, replyMarkup: this.buildAdminShortcutMenu() };
+			if (!sub || sub === 'help') return { text: `📧 <b>Email Management</b>\n\n• <code>/admin email soft EMAIL_ID</code>\n• <code>/admin email hard EMAIL_ID</code>\n• <code>/admin email purge</code>`, replyMarkup: this.buildAdminMenu() };
 			const emailId = Number(args?.[2] || 0);
 			if (sub === 'soft') {
-				if (!emailId) return { text: 'Usage: <code>/admin email soft EMAIL_ID</code>', replyMarkup: this.buildMainMenu() };
+				if (!emailId) return { text: 'Usage: <code>/admin email soft EMAIL_ID</code>', replyMarkup: this.buildAdminMenu() };
 				await c.env.db.prepare('UPDATE email SET is_del = 1 WHERE email_id = ?').bind(emailId).run();
-				return { text: `✅ Email #${emailId} soft-deleted.`, replyMarkup: this.buildMainMenu() };
+				return {
+					text: `✅ Email #${emailId} soft-deleted.`,
+					replyMarkup: this.buildDetailMenu({
+						backText: '📨 View Email',
+						backCallbackData: `cmd:mailid:${emailId}:1`,
+						extraButtons: [{ text: '📨 Mail List', callback_data: 'cmd:mail:1' }]
+					})
+				};
 			}
 			if (sub === 'hard') {
-				if (!emailId) return { text: 'Usage: <code>/admin email hard EMAIL_ID</code>', replyMarkup: this.buildMainMenu() };
+				if (!emailId) return { text: 'Usage: <code>/admin email hard EMAIL_ID</code>', replyMarkup: this.buildAdminMenu() };
 				await c.env.db.prepare('UPDATE email SET is_del = 2 WHERE email_id = ?').bind(emailId).run();
-				return { text: `✅ Email #${emailId} hard-deleted (is_del=2).`, replyMarkup: this.buildMainMenu() };
+				return {
+					text: `✅ Email #${emailId} hard-deleted.`,
+					replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: 'cmd:mail:1' })
+				};
 			}
 			if (sub === 'purge') {
 				await c.env.db.prepare('DELETE FROM email WHERE is_del = 1').run();
-				return { text: '✅ Semua email soft-deleted sudah dipurge.', replyMarkup: this.buildMainMenu() };
+				return {
+					text: '✅ All soft-deleted emails purged.',
+					replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: 'cmd:mail:1' })
+				};
 			}
 		}
 
 		if (scope === 'role') {
 			const sub = String(args?.[1] || 'list').toLowerCase();
-			if (sub === 'list') return { text: await this.formatRoleCommand(c), replyMarkup: this.buildMainMenu() };
+			if (sub === 'list') return { text: await this.formatRoleCommand(c), replyMarkup: this.buildAdminMenu() };
 			if (sub === 'add') {
 				const name = String(args?.[2] || '').trim();
 				const sendType = String(args?.[3] || 'count').trim();
 				const sendCount = Number(args?.[4] || 0);
 				const accountCount = Number(args?.[5] || 0);
-				if (!name) return { text: 'Usage: <code>/admin role add NAME [sendType] [sendCount] [accountCount]</code>', replyMarkup: this.buildMainMenu() };
+				if (!name) return { text: 'Usage: <code>/admin role add NAME [sendType] [sendCount] [accountCount]</code>', replyMarkup: this.buildAdminMenu() };
 				await c.env.db.prepare('INSERT INTO role (name, send_type, send_count, account_count, create_time, is_default) VALUES (?, ?, ?, ?, datetime("now"), 0)').bind(name, sendType, sendCount, accountCount).run();
-				return { text: `✅ Role dibuat: <b>${this.escapeHtml(name)}</b>`, replyMarkup: this.buildMainMenu() };
+				return {
+					text: `✅ Role created: <b>${this.escapeHtml(name)}</b>`,
+					replyMarkup: this.buildDetailMenu({ backText: '🛡️ Role List', backCallbackData: 'cmd:admin:role:list' })
+				};
 			}
 			if (sub === 'default') {
 				const roleId = Number(args?.[2] || 0);
-				if (!roleId) return { text: 'Usage: <code>/admin role default ROLE_ID</code>', replyMarkup: this.buildMainMenu() };
+				if (!roleId) return { text: 'Usage: <code>/admin role default ROLE_ID</code>', replyMarkup: this.buildAdminMenu() };
 				await c.env.db.batch([
 					c.env.db.prepare('UPDATE role SET is_default = 0'),
 					c.env.db.prepare('UPDATE role SET is_default = 1 WHERE role_id = ?').bind(roleId)
 				]);
-				return { text: `✅ Role #${roleId} dijadikan default.`, replyMarkup: this.buildMainMenu() };
+				return {
+					text: `✅ Role #${roleId} set as default.`,
+					replyMarkup: this.buildDetailMenu({ backText: '🛡️ Role List', backCallbackData: 'cmd:admin:role:list' })
+				};
 			}
 			if (sub === 'delete') {
 				const roleId = Number(args?.[2] || 0);
-				if (!roleId) return { text: 'Usage: <code>/admin role delete ROLE_ID</code>', replyMarkup: this.buildMainMenu() };
+				if (!roleId) return { text: 'Usage: <code>/admin role delete ROLE_ID</code>', replyMarkup: this.buildAdminMenu() };
 				await c.env.db.batch([
 					c.env.db.prepare('DELETE FROM role_perm WHERE role_id = ?').bind(roleId),
 					c.env.db.prepare('DELETE FROM role WHERE role_id = ?').bind(roleId)
 				]);
-				return { text: `✅ Role #${roleId} dihapus.`, replyMarkup: this.buildMainMenu() };
+				return {
+					text: `✅ Role #${roleId} deleted.`,
+					replyMarkup: this.buildDetailMenu({ backText: '🛡️ Role List', backCallbackData: 'cmd:admin:role:list' })
+				};
 			}
 		}
 
-		return { text: '❌ Subcommand /admin tidak dikenali. Ketik <code>/admin</code> untuk bantuan.', replyMarkup: this.buildMainMenu() };
+		return { text: '❌ Unknown /admin subcommand. Type <code>/admin</code> for help.', replyMarkup: this.buildAdminMenu() };
 	},
 
 	// ─── SYSTEM COMMAND ───────────────────────────────────────────────────────
@@ -1749,9 +1823,9 @@ Gunakan command admin agar terorganisir:
 				return `${i + 1}. [${row.createTime || '-'}] [${row.level}] ${row.eventType}: ${firstLine.slice(0, 150)}`;
 			}).join('\n');
 
-			return `🧭 <b>/system</b>
+			return `🧭 <b>System</b>
 
-<b>💾 IP Cache</b>
+<b>💾 IP Security Cache</b>
 Total rows: ${cacheCount?.total || 0}
 Stale (≥2 days): ${staleCount?.total || 0}
 
@@ -1764,7 +1838,7 @@ Notify Mode: ${pushMode}
 <b>📜 Recent Email/Error Logs</b>
 ${logs || 'No logs yet.'}`;
 		} catch (e) {
-			return `🧭 <b>/system</b>\nError: ${e.message}`;
+			return `🧭 <b>System</b>\nError: ${e.message}`;
 		}
 	},
 
@@ -1782,7 +1856,7 @@ ${logs || 'No logs yet.'}`;
 			createTime: regKey.createTime,
 		}).from(regKey).orderBy(desc(regKey.regKeyId)).limit(pageSize + 1).offset((currentPage - 1) * pageSize);
 
-		if (rows.length === 0) return { text: `🎟️ <b>/invite</b>\nNo invite code data.`, replyMarkup: this.buildMainMenu() };
+		if (rows.length === 0) return { text: `🎟️ <b>Invite Codes</b>\nNo invite codes found.`, replyMarkup: this.buildAdminMenu() };
 
 		const hasNext = rows.length > pageSize;
 		const visibleRows = hasNext ? rows.slice(0, pageSize) : rows;
@@ -1797,9 +1871,9 @@ ${logs || 'No logs yet.'}`;
 		}).join('\n');
 
 		const inviteButtons = visibleRows.map(item => [{ text: `🎟️ #${item.regKeyId} ${item.code}`.slice(0, 64), callback_data: `cmd:inviteid:${item.regKeyId}:${currentPage}` }]);
-		const pagerMarkup = this.buildPager('invite', currentPage, hasNext);
+		const pagerMarkup = this.buildPager('invite', currentPage, hasNext, 'cmd:admin');
 		const replyMarkup = { inline_keyboard: [...inviteButtons, ...(pagerMarkup?.inline_keyboard || [])] };
-		return { text: `🎟️ <b>/invite</b> (page ${currentPage})\n\n${body}`, replyMarkup };
+		return { text: `🎟️ <b>Invite Codes</b> (page ${currentPage})\n\n${body}`, replyMarkup };
 	},
 
 	async formatInviteDetailCommand(c, inviteIdArg, pageArg = 1) {
@@ -1824,7 +1898,7 @@ ${logs || 'No logs yet.'}`;
 		const expired = item.expireTime && dayjs.utc(item.expireTime).isBefore(dayjs.utc()) ? ' ⛔ Expired' : '';
 		const exhausted = item.count <= 0 ? ' ⚠️ Exhausted' : '';
 
-		const text = `🎟️ <b>Invite Detail #${inviteId}</b>
+		const text = `🎟️ <b>Invite #${inviteId}</b>
 
 🔑 Code: <code>${item.code}</code>${expired}${exhausted}
 🛡️ Role: ${roleInfo?.name || '-'}
@@ -1837,7 +1911,14 @@ ${logs || 'No logs yet.'}`;
 <b>Recent users who used this code:</b>
 ${historyText}`;
 
-		return { text, replyMarkup: this.buildDetailMenu({ backText: '🎟 Invite List', backCallbackData: `cmd:invite:${backPage}` }) };
+		return {
+			text,
+			replyMarkup: this.buildDetailMenu({
+				backText: '🎟 Invite List',
+				backCallbackData: `cmd:invite:${backPage}`,
+				extraButtons: [{ text: '🛠️ Admin', callback_data: 'cmd:admin' }]
+			})
+		};
 	},
 
 	// ─── SEARCH COMMANDS ──────────────────────────────────────────────────────
@@ -1850,7 +1931,7 @@ ${historyText}`;
 		if (type === 'email') return await this.formatMailDetailCommand(c, query, 1);
 		if (type === 'event') {
 			if (!query) return { text: this.formatSearchHelp('event'), replyMarkup: this.buildSearchMenu() };
-			if (!/^\d+$/.test(query)) return { text: `🔎 Event id harus angka: <code>${this.escapeHtml(query)}</code>`, replyMarkup: this.buildSearchMenu() };
+			if (!/^\d+$/.test(query)) return { text: `🔎 Event ID must be a number: <code>${this.escapeHtml(query)}</code>`, replyMarkup: this.buildSearchMenu() };
 			return await this.formatEventDetailCommand(c, Number(query), { backText: '🔎 Search', backCallbackData: 'cmd:search' });
 		}
 		if (type === 'keyword' || type === 'kw') {
@@ -1863,12 +1944,12 @@ ${historyText}`;
 				LIMIT 6
 			`).bind(`%${query}%`, `%${query}%`, `%${query}%`).all();
 			const items = results || [];
-			if (!items.length) return { text: `🔎 No event matched keyword: <code>${this.escapeHtml(query)}</code>`, replyMarkup: this.buildSearchMenu() };
+			if (!items.length) return { text: `🔎 No events matched: <code>${this.escapeHtml(query)}</code>`, replyMarkup: this.buildSearchMenu() };
 			const body = items.map(i => `• #${i.logId} [${i.level}] ${i.eventType}\n  ${(String(i.message || '').split('\n')[0] || '-').slice(0, 120)}\n  At: ${i.createTime || '-'}`).join('\n');
 			const buttons = items.map(i => ([{ text: `🧾 Event #${i.logId}`, callback_data: `cmd:event:${i.logId}:1` }]));
 			return {
-				text: `🔎 <b>Search Result: keyword</b>\nKeyword: <code>${this.escapeHtml(query)}</code>\n\n${body}`,
-				replyMarkup: { inline_keyboard: [...buttons, [{ text: '🔎 Search Menu', callback_data: 'cmd:search' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+				text: `🔎 <b>Search: keyword</b>\nKeyword: <code>${this.escapeHtml(query)}</code>\n\n${body}`,
+				replyMarkup: { inline_keyboard: [...buttons, [{ text: '🔎 Search', callback_data: 'cmd:search' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
 			};
 		}
 		if (type === 'invite') {
@@ -1893,16 +1974,16 @@ ${historyText}`;
 			if (!roleRow) return { text: `🔎 Role not found: <code>${query}</code>`, replyMarkup: this.buildSearchMenu() };
 			const roleInfo = await this.attachRolePermInfo(c, { ...roleRow });
 			return {
-				text: `🔎 <b>Search Result: Role</b>
+				text: `🔎 <b>Search: Role</b>
 
 🆔 <code>${roleInfo.roleId}</code> <b>${roleInfo.name}</b>
 📤 Send limit: ${this.formatSendLimit(roleInfo)}
 📬 Address limit: ${this.formatAddressLimit(roleInfo)}
-✉️ Can send: ${roleInfo.canSendEmail ? 'Yes' : 'No'} | add-address: ${roleInfo.canAddAddress ? 'Yes' : 'No'}
-🚫 Ban email: ${roleInfo.banEmail || '-'}
-🌐 Avail domain: ${roleInfo.availDomain || 'All'}
+✉️ Can send: ${roleInfo.canSendEmail ? 'Yes' : 'No'} | Add address: ${roleInfo.canAddAddress ? 'Yes' : 'No'}
+🚫 Banned email: ${roleInfo.banEmail || '-'}
+🌐 Available domain: ${roleInfo.availDomain || 'All'}
 ⭐ Default: ${roleInfo.isDefault ? 'Yes' : 'No'}`,
-				replyMarkup: this.buildSearchMenu()
+				replyMarkup: this.buildDetailMenu({ backText: '🔎 Search', backCallbackData: 'cmd:search' })
 			};
 		}
 		if (type === 'user' || type === 'account' || type === 'address') {
@@ -1936,7 +2017,7 @@ ${historyText}`;
 		return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
 	},
 
-	// ─── NEW COMMAND: RECENT EMAILS ──────────────────────────────────────────
+	// ─── RECENT EMAILS ──────────────────────────────────────────────────────
 
 	async formatRecentCommand(c) {
 		const rows = await c.env.db.prepare(`
@@ -1949,21 +2030,21 @@ ${historyText}`;
 			LIMIT 10
 		`).all();
 		const items = rows?.results || [];
-		if (!items.length) return { text: `📬 <b>/recent</b>\nNo emails yet.`, replyMarkup: this.buildMainMenu() };
+		if (!items.length) return { text: `📬 <b>Recent Emails</b>\nNo emails yet.`, replyMarkup: this.buildMainMenu() };
 
 		const body = items.map(item => {
 			const typeIcon = item.type === 0 ? '📥' : '📤';
 			const subj = (item.subject || '(no subject)').slice(0, 50);
 			const ownerTag = item.userEmail ? ` | 👤 #${item.userId}` : '';
-			return `${typeIcon} <code>#${item.emailId}</code>${ownerTag}\nFrom: ${item.sendEmail || '-'} → To: ${item.toEmail || '-'}\nSubj: ${subj}\nAt: ${item.createTime}`;
+			return `${typeIcon} <code>#${item.emailId}</code>${ownerTag}\nFrom: ${item.sendEmail || '-'} → ${item.toEmail || '-'}\nSubject: ${subj}\nAt: ${item.createTime}`;
 		}).join('\n\n');
 
 		const mailButtons = items.map(item => [{ text: `✉️ #${item.emailId} ${(item.subject || '(no subject)').slice(0, 45)}`, callback_data: `cmd:mailid:${item.emailId}:1` }]);
-		const replyMarkup = { inline_keyboard: [...mailButtons, [{ text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
-		return { text: `📬 <b>/recent</b> — Last 10 emails\n\n${body}`, replyMarkup };
+		const replyMarkup = { inline_keyboard: [...mailButtons, [{ text: '⬅️ Back to Menu', callback_data: 'cmd:menu' }]] };
+		return { text: `📬 <b>Recent Emails</b> (last 10)\n\n${body}`, replyMarkup };
 	},
 
-	// ─── NEW COMMAND: RESET QUOTA ─────────────────────────────────────────────
+	// ─── RESET QUOTA ─────────────────────────────────────────────────────────
 
 	async formatResetQuotaCommand(c, userIdArg) {
 		const userId = Number(userIdArg || 0);
@@ -1976,10 +2057,17 @@ ${historyText}`;
 		await c.env.db.prepare('UPDATE user SET send_count = 0 WHERE user_id = ?').bind(userId).run();
 		await this.logSystemEvent(c, 'admin.quota.reset', EVENT_LEVEL.INFO, `Quota reset for user #${userId} ${userRow.email} (was ${oldCount})`, { userId, email: userRow.email, oldCount });
 
-		return { text: `✅ <b>Quota Reset</b>\n\nUser: #${userId} <code>${userRow.email}</code>\nPrevious send_count: ${oldCount} → 0`, replyMarkup: { inline_keyboard: [[{ text: '👤 View User', callback_data: `cmd:userid:${userId}:1` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] } };
+		return {
+			text: `✅ <b>Quota Reset</b>\n\nUser: #${userId} <code>${userRow.email}</code>\nPrevious send_count: ${oldCount} → 0`,
+			replyMarkup: this.buildDetailMenu({
+				backText: '👤 View User',
+				backCallbackData: `cmd:userid:${userId}:1`,
+				extraButtons: [{ text: '👥 Users List', callback_data: 'cmd:admin:user:list:1' }]
+			})
+		};
 	},
 
-	// ─── NEW COMMAND: USER MAIL LIST ─────────────────────────────────────────
+	// ─── USER MAIL LIST ─────────────────────────────────────────────────────
 
 	async formatUserMailCommand(c, userIdArg, pageArg = 1) {
 		const userId = Number(userIdArg || 0);
@@ -2001,8 +2089,8 @@ ${historyText}`;
 
 		const items = rows?.results || [];
 		if (!items.length && currentPage === 1) return {
-			text: `📧 <b>Emails of #${userId} ${userRow.email}</b>\n\nNo emails found.`,
-			replyMarkup: { inline_keyboard: [[{ text: '👤 Back to User', callback_data: `cmd:userid:${userId}:1` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			text: `📧 <b>Emails of #${userId}</b> <code>${userRow.email}</code>\n\nNo emails found.`,
+			replyMarkup: this.buildDetailMenu({ backText: '👤 View User', backCallbackData: `cmd:userid:${userId}:1` })
 		};
 
 		const hasNext = items.length > pageSize;
@@ -2018,11 +2106,17 @@ ${historyText}`;
 		if (currentPage > 1) navButtons.push({ text: '⬅️ Prev', callback_data: `cmd:usermail:${userId}:${currentPage - 1}` });
 		if (hasNext) navButtons.push({ text: 'Next ➡️', callback_data: `cmd:usermail:${userId}:${currentPage + 1}` });
 
-		const replyMarkup = { inline_keyboard: [...mailButtons, navButtons.length ? navButtons : [], [{ text: '👤 Back to User', callback_data: `cmd:userid:${userId}:1` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]].filter(r => r.length) };
-		return { text: `📧 <b>Emails of #${userId} ${userRow.email}</b> (page ${currentPage})\n\n${body}`, replyMarkup };
+		const replyMarkup = {
+			inline_keyboard: [
+				...mailButtons,
+				...(navButtons.length ? [navButtons] : []),
+				[{ text: '👤 View User', callback_data: `cmd:userid:${userId}:1` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]
+			]
+		};
+		return { text: `📧 <b>Emails of #${userId}</b> <code>${userRow.email}</code> (page ${currentPage})\n\n${body}`, replyMarkup };
 	},
 
-	// ─── NEW COMMAND: STATS TOP ───────────────────────────────────────────────
+	// ─── STATS TOP ───────────────────────────────────────────────────────────
 
 	async formatStatsTopCommand(c) {
 		const [topSenders, topReceivers, topActive] = await Promise.all([
@@ -2051,12 +2145,17 @@ ${historyText}`;
 
 		const fmt = (rows) => (rows?.results || []).map((r, i) => `${i + 1}. #${r.userId} ${r.email} — ${r.cnt}`).join('\n') || '-';
 		return {
-			text: `📈 <b>/stats top</b>\n\n<b>📤 Top Senders (all time)</b>\n${fmt(topSenders)}\n\n<b>📥 Top Receivers (all time)</b>\n${fmt(topReceivers)}\n\n<b>🔥 Most Active (last 7d events)</b>\n${fmt(topActive)}`,
-			replyMarkup: { inline_keyboard: [[{ text: '📈 Back to Stats', callback_data: 'cmd:stats:7d' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			text: `📈 <b>Stats: Top Users</b>\n\n<b>📤 Top Senders (all time)</b>\n${fmt(topSenders)}\n\n<b>📥 Top Receivers (all time)</b>\n${fmt(topReceivers)}\n\n<b>🔥 Most Active (last 7 days)</b>\n${fmt(topActive)}`,
+			replyMarkup: {
+				inline_keyboard: [
+					[{ text: '📈 Back to Stats', callback_data: 'cmd:stats:7d' }, { text: '📉 Bounce/Fail', callback_data: 'cmd:stats:bounce' }],
+					[{ text: '⬅️ Back to Menu', callback_data: 'cmd:menu' }]
+				]
+			}
 		};
 	},
 
-	// ─── NEW COMMAND: STATS BOUNCE ────────────────────────────────────────────
+	// ─── STATS BOUNCE ────────────────────────────────────────────────────────
 
 	async formatStatsBounceCommand(c) {
 		const rows = await c.env.db.prepare(`
@@ -2072,8 +2171,13 @@ ${historyText}`;
 		const statusLabel = { 4: '🔴 Bounced', 5: '❌ Failed', 6: '⚠️ Complained', 7: '⏳ Delayed', 8: '📭 No recipient' };
 		const items = rows?.results || [];
 		if (!items.length) return {
-			text: `📉 <b>/stats bounce</b>\n\n✅ No bounced/failed emails found.`,
-			replyMarkup: { inline_keyboard: [[{ text: '📈 Back to Stats', callback_data: 'cmd:stats:7d' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			text: `📉 <b>Stats: Bounce/Fail</b>\n\n✅ No bounced or failed emails found.`,
+			replyMarkup: {
+				inline_keyboard: [
+					[{ text: '📈 Back to Stats', callback_data: 'cmd:stats:7d' }, { text: '🏆 Top Users', callback_data: 'cmd:stats:top' }],
+					[{ text: '⬅️ Back to Menu', callback_data: 'cmd:menu' }]
+				]
+			}
 		};
 
 		const countByStatus = {};
@@ -2082,19 +2186,23 @@ ${historyText}`;
 
 		const body = items.map(item => {
 			const lbl = statusLabel[item.status] || `Status ${item.status}`;
-			return `${lbl} <code>#${item.emailId}</code>\n  From: ${item.sendEmail || '-'} → ${item.toEmail || '-'}\n  Subj: ${(item.subject || '-').slice(0, 50)}\n  User: #${item.userId} | At: ${item.createTime}`;
+			return `${lbl} <code>#${item.emailId}</code>\n  From: ${item.sendEmail || '-'} → ${item.toEmail || '-'}\n  Subject: ${(item.subject || '-').slice(0, 50)}\n  User: #${item.userId} | At: ${item.createTime}`;
 		}).join('\n\n');
 
 		const mailButtons = items.slice(0, 8).map(item => [{ text: `✉️ #${item.emailId} ${statusLabel[item.status] || ''} ${(item.subject || '(no subject)').slice(0, 35)}`, callback_data: `cmd:mailid:${item.emailId}:1` }]);
-		const replyMarkup = { inline_keyboard: [...mailButtons, [{ text: '📈 Back to Stats', callback_data: 'cmd:stats:7d' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
-		return { text: `📉 <b>/stats bounce</b> — Recent failures\n${summary}\n\n${body}`, replyMarkup };
+		const replyMarkup = {
+			inline_keyboard: [
+				...mailButtons,
+				[{ text: '📈 Back to Stats', callback_data: 'cmd:stats:7d' }, { text: '⬅️ Back to Menu', callback_data: 'cmd:menu' }]
+			]
+		};
+		return { text: `📉 <b>Stats: Bounce/Fail</b>\n${summary}\n\n${body}`, replyMarkup };
 	},
 
 	// ─── SECURITY: BLACKLIST MANAGEMENT ──────────────────────────────────────
 
 	async formatSecurityBlacklistCommand(c, subArg, targetArg) {
 		const sub = String(subArg || 'list').toLowerCase();
-		// Support multiple targets separated by comma or space-after-comma
 		const rawTargets = String(targetArg || '').trim();
 		const targets = rawTargets.split(/[\s,]+/).map(t => t.trim()).filter(Boolean);
 
@@ -2108,7 +2216,12 @@ ${historyText}`;
 			`).run();
 		} catch (e) {}
 
-		const backMarkup = { inline_keyboard: [[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		const backMarkup = {
+			inline_keyboard: [
+				[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🔑 Keywords', callback_data: 'cmd:keyword' }],
+				[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]
+			]
+		};
 
 		if (sub === 'add' || sub === 'remove') {
 			if (!targets.length) return {
@@ -2147,7 +2260,7 @@ ${historyText}`;
 			if (results.removed.length) lines.push(`✅ Removed (${results.removed.length}): ${results.removed.map(e => `<code>${e}</code>`).join(', ')}`);
 			if (results.skipped.length) lines.push(`⚠️ Already exists: ${results.skipped.map(e => `<code>${e}</code>`).join(', ')}`);
 			if (results.notFound.length) lines.push(`⚠️ Not found: ${results.notFound.map(e => `<code>${e}</code>`).join(', ')}`);
-			if (results.invalid.length) lines.push(`❌ Invalid: ${results.invalid.map(e => `<code>${e}</code>`).join(', ')}`);
+			if (results.invalid.length) lines.push(`❌ Invalid format: ${results.invalid.map(e => `<code>${e}</code>`).join(', ')}`);
 
 			return { text: `🚫 <b>Blacklist ${sub === 'add' ? 'Add' : 'Remove'} Result</b>\n\n${lines.join('\n')}`, replyMarkup: backMarkup };
 		}
@@ -2161,8 +2274,8 @@ ${historyText}`;
 				: '✅ Blacklist is empty.';
 
 			return {
-				text: `🚫 <b>Email/Domain Blacklist</b>\n\n${body}\n\n<b>Commands (batch supported with comma):</b>\n• <code>/security blacklist add evil.com,spam@x.com</code>\n• <code>/security blacklist remove evil.com,spam@x.com</code>`,
-				replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🔑 Keywords', callback_data: 'cmd:keyword' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+				text: `🚫 <b>Email/Domain Blacklist</b>\n\n${body}\n\n<b>Commands (comma-separated batch supported):</b>\n• <code>/security blacklist add evil.com,spam@x.com</code>\n• <code>/security blacklist remove evil.com</code>`,
+				replyMarkup: backMarkup
 			};
 		} catch (e) {
 			return { text: `🚫 <b>Email Blacklist</b>\n\nError: ${e.message}`, replyMarkup: backMarkup };
@@ -2185,11 +2298,16 @@ ${historyText}`;
 			`).run();
 		} catch (e) {}
 
-		const backMarkup = { inline_keyboard: [[{ text: '🔑 Keywords', callback_data: 'cmd:keyword' }, { text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		const backMarkup = {
+			inline_keyboard: [
+				[{ text: '🔑 Keywords', callback_data: 'cmd:keyword' }, { text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }],
+				[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]
+			]
+		};
 
 		if (sub === 'add' || sub === 'remove') {
 			if (!keywords.length && !tooShort.length) return {
-				text: `🔑 Usage:\n• <code>/security keyword ${sub} judi</code>\n• <code>/security keyword ${sub} judi,gacor,slot,togel</code>`,
+				text: `🔑 Usage:\n• <code>/security keyword ${sub} spam</code>\n• <code>/security keyword ${sub} spam,junk,promo</code>`,
 				replyMarkup: backMarkup
 			};
 
@@ -2235,15 +2353,15 @@ ${historyText}`;
 				: '✅ Keyword list is empty.';
 
 			return {
-				text: `🔑 <b>Keyword Blacklist</b>\n\n${body}\n\n<b>Commands (batch dengan koma):</b>\n• <code>/security keyword add judi,gacor,slot,togel</code>\n• <code>/security keyword remove judi,gacor</code>\n\n<i>Dicek di: subject + body email (case-insensitive)\nBerlaku untuk email masuk DAN keluar.</i>`,
-				replyMarkup: { inline_keyboard: [[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+				text: `🔑 <b>Keyword Blacklist</b>\n\n${body}\n\n<b>Commands (comma-separated batch supported):</b>\n• <code>/security keyword add spam,junk,promo</code>\n• <code>/security keyword remove spam</code>\n\n<i>Checked in: subject + body (case-insensitive)\nApplied to both inbound and outbound emails.</i>`,
+				replyMarkup: backMarkup
 			};
 		} catch (e) {
 			return { text: `🔑 <b>Keyword Blacklist</b>\n\nError: ${e.message}`, replyMarkup: backMarkup };
 		}
 	},
 
-	// ─── NEW NOTIFICATION: PASSWORD CHANGE ALERT ──────────────────────────────
+	// ─── PASSWORD CHANGE NOTIFICATION ──────────────────────────────────────
 
 	async sendPasswordChangeNotification(c, userInfo, changeType = 'change') {
 		const isAdmin = this.isAdminUser(c, userInfo.email);
@@ -2276,10 +2394,6 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 
 	// ─── OUTBOUND FILTER: CHECK & NOTIFY ─────────────────────────────────────
 
-	/**
-	 * Call this from email-send service BEFORE actually sending.
-	 * Returns { blocked: true, reason, matchedRule } if blocked, else { blocked: false }.
-	 */
 	async checkOutboundFilter(c, { toEmail, subject, bodyText }) {
 		const toEmailLower = (toEmail || '').trim().toLowerCase();
 		const toDomain = toEmailLower.includes('@') ? toEmailLower.split('@')[1] : '';
@@ -2321,9 +2435,6 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 		return { blocked: false };
 	},
 
-	/**
-	 * Log a blocked outbound email attempt to security board (silent, no push).
-	 */
 	async logOutboundBlocked(c, { actorUser, toEmail, subject, bodyText, matchedRule, reason }) {
 		try {
 			await c.env.db.prepare(`
@@ -2398,62 +2509,46 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 				return { text: await this.formatStatusCommand(c), replyMarkup: this.buildMainMenu() };
 			case '/help':
 				return {
-					text: `🤖 <b>Abyn Mail Bot — Command Center</b>
+					text: `🤖 <b>Mail Bot — Help</b>
 
-📊 /status — Main dashboard (overview + runtime + counters)
-🔐 /security — Security dashboard (risky IP + blocked logs)
-🧭 /system — Webhook health + recent errors
+📊 /status — Dashboard overview
+🔐 /security — Security dashboard
+🧭 /system — Webhook &amp; system health
 
-👤 /user &lt;id&gt; — User detail with role, quota, progress bars
-📧 /usermail &lt;userId&gt; [page] — List a user's emails
-📨 /mail [page|emailId] — Emails with pager or detail
-📬 /recent — Last 10 emails across all users
+👤 /user &lt;id&gt; — User detail with quotas
+📧 /usermail &lt;userId&gt; [page] — User emails
+📨 /mail [page|emailId] — Mail list or detail
+📬 /recent — Last 10 emails
 
-📈 /stats [range|top|bounce] — Email &amp; user stats
-🗂 /events [page] — Webhook/system event log
-🧾 /event &lt;id&gt; — Event detail + preview
-🛠️ /admin — Admin command center (invite/user/account/email/role)
-🔎 /search [type] [query] — Search user/email/invite/role/ip
-🌐 /whois &lt;ip&gt; — IP intelligence lookup
-
-🔄 /resetquota &lt;userId&gt; — Reset user send quota to 0
-🆔 /chatid — Your chat_id / user_id
+📈 /stats [7d|14d|top|bounce] — Statistics
+🗂 /events [page] — System event log
+🧾 /event &lt;id&gt; — Event detail
+🛠️ /admin — Admin command center
+🔎 /search [type] [query] — Search anything
+🔄 /resetquota &lt;userId&gt; — Reset send quota
+🆔 /chatid — Your chat ID
 
 ━━━━━━━━━━━━━━━━━━━━
-📌 <b>Subcommands &amp; Examples</b>
-
-👤 <b>User</b>
-• <code>/user 1</code> — detail user #1
-• <code>/usermail 5 2</code> — emails of user #5, page 2
-• <code>/resetquota 5</code> — reset send quota user #5
-• <code>/admin user ban 5</code> / <code>/admin user unban 5</code>
-
-📈 <b>Stats</b>
-• <code>/stats 7d</code> — last 7 days (default)
-• <code>/stats 14d</code> — last 14 days
-• <code>/stats top</code> — top senders/receivers
-• <code>/stats bounce</code> — bounced/failed emails
-
-🔐 <b>Security</b>
-• <code>/security</code> — dashboard detail security
-• <code>/security event &lt;id&gt;</code> — event detail
-• <code>/security blacklist add spammer@evil.com</code>
-• <code>/security blacklist add evil.com</code>
-• <code>/security blacklist remove spammer@evil.com</code>
-• <code>/security keyword add judi</code>
-• <code>/security keyword add gacor</code>
-• <code>/security keyword remove judi</code>
-
-🔎 <b>Search</b>
-• <code>/search user abyn@abyn.xyz</code>
-• <code>/search user 5</code> — by user ID
-• <code>/search email 121</code> — by email ID
+<b>🔎 Search Types</b>
+• <code>/search user 5</code> or <code>/search user email@x.com</code>
+• <code>/search email 121</code>
 • <code>/search invite CODE123</code>
 • <code>/search role admin</code>
 • <code>/search event 128</code>
 • <code>/search keyword delete</code>
-• <code>/search ip 1.2.3.4</code>`,
-					replyMarkup: this.buildAdminShortcutMenu()
+• <code>/search ip 1.2.3.4</code>
+
+<b>🔐 Security</b>
+• <code>/security blacklist add evil.com,spam@x.com</code>
+• <code>/security blacklist remove evil.com</code>
+• <code>/security keyword add spam,junk</code>
+• <code>/security keyword remove spam</code>
+
+<b>🛠️ Admin</b>
+• <code>/admin user ban 5</code> / <code>/admin user unban 5</code>
+• <code>/admin user role 5 2</code>
+• <code>/admin invite create CODE 1 10</code>`,
+					replyMarkup: this.buildMainMenu()
 				};
 			case '/recent': {
 				const result = await this.formatRecentCommand(c);
@@ -2502,7 +2597,12 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 					return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:security') };
 				}
 			case '/whois':
-				return await this.formatWhoisCommand(c, args?.[0]);
+				// /whois is removed — redirect to search ip
+				if (args?.[0]) return await this.formatWhoisCommand(c, args[0]);
+				return {
+					text: `🌐 <b>IP Lookup</b>\nUse: <code>/search ip &lt;ip&gt;</code>\nExample: <code>/search ip 1.1.1.1</code>`,
+					replyMarkup: this.buildSearchMenu()
+				};
 			case '/stats':
 				return await this.formatStatsCommand(c, args?.[0] || '7d');
 			case '/events': {
@@ -2587,6 +2687,9 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 					const uRow = await c.env.db.prepare('SELECT status FROM user WHERE user_id = ?').bind(uid).first();
 					const isBanned = uRow?.status === 1;
 					command = '/admin'; args = ['user', isBanned ? 'unban' : 'ban', String(uid)];
+				} else if (/^cmd:resetquota:(\d+)$/.test(callback.data)) {
+					const m = /^cmd:resetquota:(\d+)$/.exec(callback.data);
+					command = '/resetquota'; args = [m[1]];
 				} else if (callback.data === 'cmd:admin') {
 					command = '/admin';
 				} else if (/^cmd:admin:user:list:(\d+)$/.test(callback.data)) {
@@ -2699,6 +2802,25 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 		if (userMessageId && message?.from?.id) {
 			await this.deleteTelegramMessage(c, chatId, userMessageId);
 		}
+	},
+
+	// ─── SECURITY ALERT ──────────────────────────────────────────────────────
+
+	async sendSecurityEventAlert(c, title, detail = '', callbackData = 'cmd:security') {
+		const allowed = await this.parseAllowedChatIds(c);
+		if (!allowed.length) return;
+		const tgBotToken = await this.getBotToken(c);
+		if (!tgBotToken) return;
+		const text = `🚨 <b>Security Event</b>\n${title}${detail ? `\n${detail}` : ''}`;
+		const replyMarkup = { inline_keyboard: [[{ text: '🔐 Security', callback_data: callbackData }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		await Promise.all(allowed.map(async chatId => {
+			const payload = { chat_id: chatId, parse_mode: 'HTML', text, reply_markup: replyMarkup };
+			await fetch(`https://api.telegram.org/bot${tgBotToken}/sendMessage`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload)
+			});
+		}));
 	},
 };
 
