@@ -37,6 +37,7 @@ import emailTextTemplate from '../template/email-text';
 import emailHtmlTemplate from '../template/email-html';
 import domainUtils from '../utils/domain-uitls';
 import analysisDao from '../dao/analysis-dao';
+import cryptoUtils from '../utils/crypto-utils';
 
 const EVENT_LEVEL = {
 	INFO: 'info',
@@ -717,11 +718,22 @@ Blocked at: ${row.createTime} UTC<br>
 			inline_keyboard: [
 				[{ text: '📊 Status', callback_data: 'cmd:status' }, { text: '🔐 Security', callback_data: 'cmd:security' }],
 				[{ text: '🧭 System', callback_data: 'cmd:system' }, { text: '🗂 Events', callback_data: 'cmd:events:1' }],
-				[{ text: '👥 Users', callback_data: 'cmd:users:1' }, { text: '📨 Mail', callback_data: 'cmd:mail:1' }],
-				[{ text: '📈 Stats', callback_data: 'cmd:stats:7d' }, { text: '📬 Recent', callback_data: 'cmd:recent' }],
-				[{ text: '🎟️ Invite', callback_data: 'cmd:invite:1' }, { text: '🔎 Search', callback_data: 'cmd:search' }],
-				[{ text: '🌐 Whois', callback_data: 'cmd:whois:help' }, { text: '🆔 Chat ID', callback_data: 'cmd:chatid' }],
-				[{ text: '🛡️ Role', callback_data: 'cmd:role' }, { text: '❓ Help', callback_data: 'cmd:help' }]
+				[{ text: '📨 Mail', callback_data: 'cmd:mail:1' }, { text: '📬 Recent', callback_data: 'cmd:recent' }],
+				[{ text: '📈 Stats', callback_data: 'cmd:stats:7d' }, { text: '🔎 Search', callback_data: 'cmd:search' }],
+				[{ text: '🛠️ Admin', callback_data: 'cmd:admin' }, { text: '🌐 Whois', callback_data: 'cmd:whois:help' }],
+				[{ text: '🆔 Chat ID', callback_data: 'cmd:chatid' }, { text: '❓ Help', callback_data: 'cmd:help' }],
+			]
+		};
+	},
+
+
+	buildAdminShortcutMenu() {
+		return {
+			inline_keyboard: [
+				[{ text: '👥 User List', callback_data: 'cmd:admin:user:list:1' }, { text: '🎟️ Invite List', callback_data: 'cmd:admin:invite:list:1' }],
+				[{ text: '🛡️ Role List', callback_data: 'cmd:admin:role:list' }, { text: '📬 Account Help', callback_data: 'cmd:admin:account' }],
+				[{ text: '📧 Email Delete Help', callback_data: 'cmd:admin:email' }],
+				[{ text: '⬅️ Back', callback_data: 'cmd:menu' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]
 			]
 		};
 	},
@@ -1017,7 +1029,7 @@ ${ipLine}
 
 ${this.formatActivityBlock(recent)}`;
 
-		const replyMarkup = { inline_keyboard: [...eventButtons, [{ text: '📧 View Emails', callback_data: `cmd:usermail:${userRow.userId}:1` }, { text: '🚫 Ban/Unban', callback_data: `cmd:banuser:${userRow.userId}` }], [{ text: '👥 Users List', callback_data: `cmd:users:${backPage}` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
+		const replyMarkup = { inline_keyboard: [...eventButtons, [{ text: '📧 View Emails', callback_data: `cmd:usermail:${userRow.userId}:1` }], [{ text: '👥 Users List', callback_data: `cmd:users:${backPage}` }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] };
 		return { text: detail, replyMarkup };
 	},
 
@@ -1297,7 +1309,7 @@ Tip: gunakan <code>/security</code> untuk detail insiden dan <code>/system</code
 
 	async formatBanUserCommand(c, userIdArg, action = 'ban') {
 		const userId = Number(userIdArg || 0);
-		if (!userId) return { text: `🚫 Usage: <code>/ban &lt;userId&gt;</code> or <code>/unban &lt;userId&gt;</code>`, replyMarkup: this.buildMainMenu() };
+		if (!userId) return { text: `🚫 Usage: <code>/admin user ban &lt;userId&gt;</code> or <code>/admin user unban &lt;userId&gt;</code>`, replyMarkup: this.buildMainMenu() };
 
 		const userRow = await c.env.db.prepare('SELECT user_id as userId, email, status, is_del as isDel FROM user WHERE user_id = ?').bind(userId).first();
 		if (!userRow) return { text: `🚫 User #${userId} not found.`, replyMarkup: this.buildMainMenu() };
@@ -1520,7 +1532,6 @@ At: ${item.createTime}`).join('\n\n');
 
 📥/📤 Type: ${row.type === 0 ? 'Received' : 'Sent'}
 📊 Status: ${statusMap[row.status] || row.status}
-👁️ Read: ${row.unread ? 'Unread' : 'Read'}
 🗑️ Deleted: ${isDelLabel}
 
 📤 From: <code>${row.sendEmail || '-'}</code>
@@ -1533,6 +1544,183 @@ At: ${item.createTime}`).join('\n\n');
 ${preview || '-'}`;
 
 		return { text: detail, replyMarkup: this.buildDetailMenu({ backText: '📨 Mail List', backCallbackData: `cmd:mail:${backPage}`, previewUrl: webAppUrl }) };
+	},
+
+	async formatAdminCommand(c, args = []) {
+		const scope = String(args?.[0] || '').toLowerCase();
+		if (!scope) {
+			return {
+				text: `🛠️ <b>/admin Command Center</b>
+
+Gunakan command admin agar terorganisir:
+
+🎟️ Invite code
+• <code>/admin invite list [page]</code>
+• <code>/admin invite create CODE ROLE_ID [COUNT] [YYYY-MM-DD HH:mm:ss]</code>
+• <code>/admin invite delete ID|CODE</code>
+• <code>/admin invite clear</code>
+
+👤 Akun user
+• <code>/admin user list [page]</code>
+• <code>/admin user create email@domain.com password [roleId]</code>
+• <code>/admin user role USER_ID ROLE_ID</code>
+• <code>/admin user ban USER_ID</code> / <code>/admin user unban USER_ID</code>
+• <code>/admin user delete USER_ID</code>
+
+📮 Alamat email (account)
+• <code>/admin account add USER_ID alias@domain.com</code>
+• <code>/admin account delete ACCOUNT_ID</code>
+
+📧 Email deletion
+• <code>/admin email soft EMAIL_ID</code>
+• <code>/admin email hard EMAIL_ID</code>
+• <code>/admin email purge</code> (hapus semua soft-deleted)
+
+🛡️ Role
+• <code>/admin role list</code>
+• <code>/admin role add NAME [sendType] [sendCount] [accountCount]</code>
+• <code>/admin role default ROLE_ID</code>
+• <code>/admin role delete ROLE_ID</code>`,
+				replyMarkup: this.buildAdminShortcutMenu()
+			};
+		}
+
+		if (scope === 'invite') {
+			const sub = String(args?.[1] || 'list').toLowerCase();
+			if (sub === 'list') return await this.formatInviteCommand(c, Number(args?.[2] || 1));
+			if (sub === 'create') {
+				const code = String(args?.[2] || '').trim();
+				const roleId = Number(args?.[3] || 0);
+				const count = Number(args?.[4] || 1);
+				const expireTime = String(args?.[5] || '').trim();
+				if (!code || !roleId) return { text: 'Usage: <code>/admin invite create CODE ROLE_ID [COUNT] [YYYY-MM-DD HH:mm:ss]</code>', replyMarkup: this.buildMainMenu() };
+				try {
+					await c.env.db.prepare('INSERT INTO reg_key (code, count, role_id, create_time, expire_time) VALUES (?, ?, ?, datetime("now"), ?)').bind(code, Math.max(1, count), roleId, expireTime || null).run();
+					return { text: `✅ Invite dibuat: <code>${this.escapeHtml(code)}</code> (role ${roleId}, count ${Math.max(1, count)})`, replyMarkup: this.buildMainMenu() };
+				} catch (e) {
+					return { text: `❌ Gagal create invite: ${this.escapeHtml(e.message)}`, replyMarkup: this.buildMainMenu() };
+				}
+			}
+			if (sub === 'delete') {
+				const target = String(args?.[2] || '').trim();
+				if (!target) return { text: 'Usage: <code>/admin invite delete ID|CODE</code>', replyMarkup: this.buildMainMenu() };
+				if (/^\d+$/.test(target)) await c.env.db.prepare('DELETE FROM reg_key WHERE rege_key_id = ?').bind(Number(target)).run();
+				else await c.env.db.prepare('DELETE FROM reg_key WHERE code = ? COLLATE NOCASE').bind(target).run();
+				return { text: `✅ Invite target <code>${this.escapeHtml(target)}</code> dihapus.`, replyMarkup: this.buildMainMenu() };
+			}
+			if (sub === 'clear') {
+				await c.env.db.prepare('DELETE FROM reg_key WHERE user_id = 0').run();
+				return { text: '✅ Semua invite yang belum dipakai sudah dihapus.', replyMarkup: this.buildMainMenu() };
+			}
+		}
+
+		if (scope === 'user') {
+			const sub = String(args?.[1] || 'list').toLowerCase();
+			if (sub === 'list') return await this.formatUsersCommand(c, Number(args?.[2] || 1));
+			if (sub === 'create') {
+				const emailAddr = String(args?.[2] || '').trim().toLowerCase();
+				const password = String(args?.[3] || '');
+				const roleId = Number(args?.[4] || 1);
+				if (!emailAddr || !password) return { text: 'Usage: <code>/admin user create email@domain.com password [roleId]</code>', replyMarkup: this.buildMainMenu() };
+				const exists = await c.env.db.prepare('SELECT user_id as userId FROM user WHERE email = ? COLLATE NOCASE LIMIT 1').bind(emailAddr).first();
+				if (exists) return { text: `⚠️ User sudah ada: <code>${this.escapeHtml(emailAddr)}</code>`, replyMarkup: this.buildMainMenu() };
+				const { salt, hash } = await cryptoUtils.hashPassword(password);
+				const created = await c.env.db.prepare('INSERT INTO user (email, password, salt, type, status, create_time, is_del) VALUES (?, ?, ?, ?, 0, datetime("now"), 0) RETURNING user_id as userId').bind(emailAddr, hash, salt, roleId).first();
+				return { text: `✅ User dibuat: #${created?.userId || '-'} <code>${this.escapeHtml(emailAddr)}</code> role=${roleId}`, replyMarkup: this.buildMainMenu() };
+			}
+			if (sub === 'role') {
+				const userId = Number(args?.[2] || 0);
+				const roleId = Number(args?.[3] || 0);
+				if (!userId || !roleId) return { text: 'Usage: <code>/admin user role USER_ID ROLE_ID</code>', replyMarkup: this.buildMainMenu() };
+				await c.env.db.prepare('UPDATE user SET type = ? WHERE user_id = ?').bind(roleId, userId).run();
+				return { text: `✅ Role user #${userId} diubah ke role #${roleId}.`, replyMarkup: this.buildMainMenu() };
+			}
+			if (sub === 'ban' || sub === 'unban') return await this.formatBanUserCommand(c, args?.[2], sub === 'ban' ? 'ban' : 'unban');
+			if (sub === 'delete') {
+				const userId = Number(args?.[2] || 0);
+				if (!userId) return { text: 'Usage: <code>/admin user delete USER_ID</code>', replyMarkup: this.buildMainMenu() };
+				await c.env.db.batch([
+					c.env.db.prepare('UPDATE user SET is_del = 1 WHERE user_id = ?').bind(userId),
+					c.env.db.prepare('UPDATE account SET is_del = 1 WHERE user_id = ?').bind(userId),
+					c.env.db.prepare('UPDATE email SET is_del = 1 WHERE user_id = ?').bind(userId)
+				]);
+				return { text: `✅ User #${userId} soft-deleted (termasuk account & email).`, replyMarkup: this.buildMainMenu() };
+			}
+		}
+
+		if (scope === 'account') {
+			const sub = String(args?.[1] || '').toLowerCase();
+			if (!sub || sub === 'help') return { text: `📬 <b>/admin account</b>\n\n• <code>/admin account add USER_ID alias@domain.com</code>\n• <code>/admin account delete ACCOUNT_ID</code>`, replyMarkup: this.buildAdminShortcutMenu() };
+			if (sub === 'add') {
+				const userId = Number(args?.[2] || 0);
+				const emailAddr = String(args?.[3] || '').trim().toLowerCase();
+				if (!userId || !emailAddr) return { text: 'Usage: <code>/admin account add USER_ID alias@domain.com</code>', replyMarkup: this.buildMainMenu() };
+				const exists = await c.env.db.prepare('SELECT account_id FROM account WHERE email = ? COLLATE NOCASE LIMIT 1').bind(emailAddr).first();
+				if (exists) return { text: `⚠️ Address sudah ada: <code>${this.escapeHtml(emailAddr)}</code>`, replyMarkup: this.buildMainMenu() };
+				await c.env.db.prepare('INSERT INTO account (email, name, status, user_id, create_time, is_del) VALUES (?, ?, 0, ?, datetime("now"), 0)').bind(emailAddr, emailAddr.split('@')[0], userId).run();
+				return { text: `✅ Address ditambahkan ke user #${userId}: <code>${this.escapeHtml(emailAddr)}</code>`, replyMarkup: this.buildMainMenu() };
+			}
+			if (sub === 'delete') {
+				const accountId = Number(args?.[2] || 0);
+				if (!accountId) return { text: 'Usage: <code>/admin account delete ACCOUNT_ID</code>', replyMarkup: this.buildMainMenu() };
+				await c.env.db.prepare('UPDATE account SET is_del = 1 WHERE account_id = ?').bind(accountId).run();
+				return { text: `✅ Account #${accountId} soft-deleted.`, replyMarkup: this.buildMainMenu() };
+			}
+		}
+
+		if (scope === 'email') {
+			const sub = String(args?.[1] || '').toLowerCase();
+			if (!sub || sub === 'help') return { text: `📧 <b>/admin email</b>\n\n• <code>/admin email soft EMAIL_ID</code>\n• <code>/admin email hard EMAIL_ID</code>\n• <code>/admin email purge</code>`, replyMarkup: this.buildAdminShortcutMenu() };
+			const emailId = Number(args?.[2] || 0);
+			if (sub === 'soft') {
+				if (!emailId) return { text: 'Usage: <code>/admin email soft EMAIL_ID</code>', replyMarkup: this.buildMainMenu() };
+				await c.env.db.prepare('UPDATE email SET is_del = 1 WHERE email_id = ?').bind(emailId).run();
+				return { text: `✅ Email #${emailId} soft-deleted.`, replyMarkup: this.buildMainMenu() };
+			}
+			if (sub === 'hard') {
+				if (!emailId) return { text: 'Usage: <code>/admin email hard EMAIL_ID</code>', replyMarkup: this.buildMainMenu() };
+				await c.env.db.prepare('UPDATE email SET is_del = 2 WHERE email_id = ?').bind(emailId).run();
+				return { text: `✅ Email #${emailId} hard-deleted (is_del=2).`, replyMarkup: this.buildMainMenu() };
+			}
+			if (sub === 'purge') {
+				await c.env.db.prepare('DELETE FROM email WHERE is_del = 1').run();
+				return { text: '✅ Semua email soft-deleted sudah dipurge.', replyMarkup: this.buildMainMenu() };
+			}
+		}
+
+		if (scope === 'role') {
+			const sub = String(args?.[1] || 'list').toLowerCase();
+			if (sub === 'list') return { text: await this.formatRoleCommand(c), replyMarkup: this.buildMainMenu() };
+			if (sub === 'add') {
+				const name = String(args?.[2] || '').trim();
+				const sendType = String(args?.[3] || 'count').trim();
+				const sendCount = Number(args?.[4] || 0);
+				const accountCount = Number(args?.[5] || 0);
+				if (!name) return { text: 'Usage: <code>/admin role add NAME [sendType] [sendCount] [accountCount]</code>', replyMarkup: this.buildMainMenu() };
+				await c.env.db.prepare('INSERT INTO role (name, send_type, send_count, account_count, create_time, is_default) VALUES (?, ?, ?, ?, datetime("now"), 0)').bind(name, sendType, sendCount, accountCount).run();
+				return { text: `✅ Role dibuat: <b>${this.escapeHtml(name)}</b>`, replyMarkup: this.buildMainMenu() };
+			}
+			if (sub === 'default') {
+				const roleId = Number(args?.[2] || 0);
+				if (!roleId) return { text: 'Usage: <code>/admin role default ROLE_ID</code>', replyMarkup: this.buildMainMenu() };
+				await c.env.db.batch([
+					c.env.db.prepare('UPDATE role SET is_default = 0'),
+					c.env.db.prepare('UPDATE role SET is_default = 1 WHERE role_id = ?').bind(roleId)
+				]);
+				return { text: `✅ Role #${roleId} dijadikan default.`, replyMarkup: this.buildMainMenu() };
+			}
+			if (sub === 'delete') {
+				const roleId = Number(args?.[2] || 0);
+				if (!roleId) return { text: 'Usage: <code>/admin role delete ROLE_ID</code>', replyMarkup: this.buildMainMenu() };
+				await c.env.db.batch([
+					c.env.db.prepare('DELETE FROM role_perm WHERE role_id = ?').bind(roleId),
+					c.env.db.prepare('DELETE FROM role WHERE role_id = ?').bind(roleId)
+				]);
+				return { text: `✅ Role #${roleId} dihapus.`, replyMarkup: this.buildMainMenu() };
+			}
+		}
+
+		return { text: '❌ Subcommand /admin tidak dikenali. Ketik <code>/admin</code> untuk bantuan.', replyMarkup: this.buildMainMenu() };
 	},
 
 	// ─── SYSTEM COMMAND ───────────────────────────────────────────────────────
@@ -2216,7 +2404,6 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 🔐 /security — Security dashboard (risky IP + blocked logs)
 🧭 /system — Webhook health + recent errors
 
-👥 /users [page] — Users list with quota info
 👤 /user &lt;id&gt; — User detail with role, quota, progress bars
 📧 /usermail &lt;userId&gt; [page] — List a user's emails
 📨 /mail [page|emailId] — Emails with pager or detail
@@ -2225,14 +2412,11 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 📈 /stats [range|top|bounce] — Email &amp; user stats
 🗂 /events [page] — Webhook/system event log
 🧾 /event &lt;id&gt; — Event detail + preview
-🛡️ /role — Role quota + authorization flags
-🎟️ /invite [page] — Invite codes with usage history
+🛠️ /admin — Admin command center (invite/user/account/email/role)
 🔎 /search [type] [query] — Search user/email/invite/role/ip
 🌐 /whois &lt;ip&gt; — IP intelligence lookup
 
 🔄 /resetquota &lt;userId&gt; — Reset user send quota to 0
-🚫 /ban &lt;userId&gt; — Ban a user
-✅ /unban &lt;userId&gt; — Unban a user
 🆔 /chatid — Your chat_id / user_id
 
 ━━━━━━━━━━━━━━━━━━━━
@@ -2242,7 +2426,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 • <code>/user 1</code> — detail user #1
 • <code>/usermail 5 2</code> — emails of user #5, page 2
 • <code>/resetquota 5</code> — reset send quota user #5
-• <code>/ban 5</code> / <code>/unban 5</code>
+• <code>/admin user ban 5</code> / <code>/admin user unban 5</code>
 
 📈 <b>Stats</b>
 • <code>/stats 7d</code> — last 7 days (default)
@@ -2269,7 +2453,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 • <code>/search event 128</code>
 • <code>/search keyword delete</code>
 • <code>/search ip 1.2.3.4</code>`,
-					replyMarkup: this.buildMainMenu()
+					replyMarkup: this.buildAdminShortcutMenu()
 				};
 			case '/recent': {
 				const result = await this.formatRecentCommand(c);
@@ -2286,15 +2470,17 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 				return await this.formatMailCommand(c, pageArg);
 			case '/users':
 				if (args?.[0] === 'detail') return await this.formatUserDetailCommand(c, args?.[1], args?.[2]);
-				return await this.formatUsersCommand(c, pageArg);
+				return await this.formatAdminCommand(c, ['user', 'list', String(pageArg)]);
 			case '/user':
 				return await this.formatUserDetailCommand(c, args?.[0], args?.[1]);
 			case '/role':
-				return { text: await this.formatRoleCommand(c), replyMarkup: this.buildMainMenu() };
+				return await this.formatAdminCommand(c, ['role', 'list']);
 			case '/invite':
 				if (args?.[0] === 'detail') return await this.formatInviteDetailCommand(c, args?.[1], args?.[2]);
 				if (args?.[0] && /^\d+$/.test(String(args[0])) && Number(args[0]) > 50) return await this.formatInviteDetailCommand(c, args[0], 1);
-				return await this.formatInviteCommand(c, pageArg);
+				return await this.formatAdminCommand(c, ['invite', 'list', String(pageArg)]);
+			case '/admin':
+				return await this.formatAdminCommand(c, args || []);
 			case '/status':
 				return { text: await this.formatStatusCommand(c), replyMarkup: this.appendRefreshButton(this.buildMainMenu(), 'cmd:refresh:status') };
 			case '/chatid':
@@ -2328,10 +2514,6 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 			case '/event':
 				if (args?.[0] === 'user') return await this.formatEventDetailCommand(c, args?.[1], { backText: '👤 User Detail', backCallbackData: `cmd:userid:${args?.[2] || 1}:${args?.[3] || 1}` });
 				return await this.formatEventDetailCommand(c, args?.[0], { backPage: args?.[1] });
-			case '/ban':
-				return await this.formatBanUserCommand(c, args?.[0], 'ban');
-			case '/unban':
-				return await this.formatBanUserCommand(c, args?.[0], 'unban');
 			case '/search':
 			case '/searchs':
 				if (!args?.[0]) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
@@ -2404,7 +2586,21 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 					const uid = Number(m[1]);
 					const uRow = await c.env.db.prepare('SELECT status FROM user WHERE user_id = ?').bind(uid).first();
 					const isBanned = uRow?.status === 1;
-					command = isBanned ? '/unban' : '/ban'; args = [String(uid)];
+					command = '/admin'; args = ['user', isBanned ? 'unban' : 'ban', String(uid)];
+				} else if (callback.data === 'cmd:admin') {
+					command = '/admin';
+				} else if (/^cmd:admin:user:list:(\d+)$/.test(callback.data)) {
+					const m = /^cmd:admin:user:list:(\d+)$/.exec(callback.data);
+					command = '/admin'; args = ['user', 'list', m[1]];
+				} else if (/^cmd:admin:invite:list:(\d+)$/.test(callback.data)) {
+					const m = /^cmd:admin:invite:list:(\d+)$/.exec(callback.data);
+					command = '/admin'; args = ['invite', 'list', m[1]];
+				} else if (callback.data === 'cmd:admin:role:list') {
+					command = '/admin'; args = ['role', 'list'];
+				} else if (callback.data === 'cmd:admin:account') {
+					command = '/admin'; args = ['account', 'help'];
+				} else if (callback.data === 'cmd:admin:email') {
+					command = '/admin'; args = ['email', 'help'];
 				} else if (callback.data === 'cmd:blacklist') {
 					command = '/security'; args = ['blacklist'];
 				} else if (callback.data === 'cmd:keyword') {
@@ -2449,7 +2645,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 						command = '/search'; args = ['event', String(Math.max(1, Number(parts[4] || 0)))];
 					}
 				} else {
-					const single = /^cmd:(status|role|chatid|system|security|recent)$/.exec(callback.data);
+					const single = /^cmd:(status|role|admin|chatid|system|security|recent)$/.exec(callback.data);
 					if (single) command = `/${single[1]}`;
 				}
 			}
