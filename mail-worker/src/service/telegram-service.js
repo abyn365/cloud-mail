@@ -677,14 +677,65 @@ Blocked at: ${row.createTime} UTC<br>
 	buildMainMenu() {
 		return {
 			inline_keyboard: [
-				[{ text: '📊 Status', callback_data: 'cmd:status' }, { text: '🛡️ Role', callback_data: 'cmd:role' }],
-				[{ text: '📨 Mail', callback_data: 'cmd:mail:1' }, { text: '👥 Users', callback_data: 'cmd:users:1' }],
-				[{ text: '🔐 Security', callback_data: 'cmd:security' }, { text: '🌐 Whois', callback_data: 'cmd:whois:help' }],
-				[{ text: '📈 Stats', callback_data: 'cmd:stats:7d' }, { text: '🎟️ Invite', callback_data: 'cmd:invite:1' }],
+				[{ text: '📊 Status', callback_data: 'cmd:status' }, { text: '🔐 Security', callback_data: 'cmd:security' }],
 				[{ text: '🧭 System', callback_data: 'cmd:system' }, { text: '🗂 Events', callback_data: 'cmd:events:1' }],
-				[{ text: '📬 Recent', callback_data: 'cmd:recent' }, { text: '🔎 Search', callback_data: 'cmd:search' }],
-				[{ text: '🆔 Chat ID', callback_data: 'cmd:chatid' }, { text: '❓ Help', callback_data: 'cmd:help' }]
+				[{ text: '👥 Users', callback_data: 'cmd:users:1' }, { text: '📨 Mail', callback_data: 'cmd:mail:1' }],
+				[{ text: '📈 Stats', callback_data: 'cmd:stats:7d' }, { text: '📬 Recent', callback_data: 'cmd:recent' }],
+				[{ text: '🎟️ Invite', callback_data: 'cmd:invite:1' }, { text: '🔎 Search', callback_data: 'cmd:search' }],
+				[{ text: '🌐 Whois', callback_data: 'cmd:whois:help' }, { text: '🆔 Chat ID', callback_data: 'cmd:chatid' }],
+				[{ text: '🛡️ Role', callback_data: 'cmd:role' }, { text: '❓ Help', callback_data: 'cmd:help' }]
 			]
+		};
+	},
+
+	severityLabel(value, warnThreshold, dangerThreshold, reverse = false) {
+		const safeValue = Number(value || 0);
+		if (reverse) {
+			if (safeValue <= dangerThreshold) return '🔴';
+			if (safeValue <= warnThreshold) return '🟡';
+			return '🟢';
+		}
+		if (safeValue >= dangerThreshold) return '🔴';
+		if (safeValue >= warnThreshold) return '🟡';
+		return '🟢';
+	},
+
+	async collectAtGlanceMetrics(c) {
+		const numberCount = await analysisDao.numberCount(c);
+		const allowed = await this.parseAllowedChatIds(c);
+		const setting = await settingService.query(c);
+		const botEnabled = Boolean(setting.tgBotToken);
+
+		const [{ cnt: failed24h = 0 } = {}] = [await c.env.db.prepare(`
+			SELECT COUNT(*) as cnt
+			FROM webhook_event_log
+			WHERE event_type = 'auth.login.failed'
+			  AND create_time >= datetime('now', '-24 hour')
+		`).first()];
+
+		const [{ cnt: blocked24h = 0 } = {}] = [await c.env.db.prepare(`
+			SELECT COUNT(*) as cnt
+			FROM webhook_event_log
+			WHERE event_type IN ('security.blacklist.blocked', 'security.outbound.blocked')
+			  AND create_time >= datetime('now', '-24 hour')
+		`).first()];
+
+		const [{ cnt: systemError24h = 0 } = {}] = [await c.env.db.prepare(`
+			SELECT COUNT(*) as cnt
+			FROM webhook_event_log
+			WHERE level = 'error'
+			  AND create_time >= datetime('now', '-24 hour')
+		`).first()];
+
+		return {
+			numberCount,
+			allowed,
+			botEnabled,
+			pushEnabled: await this.shouldSendWebhookPush(c),
+			failed24h,
+			blocked24h,
+			systemError24h,
+			nowUtc: dayjs.utc().format('YYYY-MM-DD HH:mm:ss')
 		};
 	},
 
@@ -1050,10 +1101,7 @@ ${isAdmin ? '👑' : '🛡️'} Role: ${roleDisplay} | Status: ${this.mapUserSta
 	// ─── ENHANCED COMMAND: STATUS ─────────────────────────────────────────────
 
 	async formatStatusCommand(c) {
-		const numberCount = await analysisDao.numberCount(c);
-		const allowed = await this.parseAllowedChatIds(c);
-		const setting = await settingService.query(c);
-		const botEnabled = Boolean(setting.tgBotToken);
+		const metrics = await this.collectAtGlanceMetrics(c);
 
 		const todayStr = dayjs.utc().format('YYYY-MM-DD');
 		const todayRegRow = await c.env.db.prepare(`SELECT COUNT(*) as cnt FROM user WHERE DATE(create_time) = ?`).bind(todayStr).first();
@@ -1061,31 +1109,41 @@ ${isAdmin ? '👑' : '🛡️'} Role: ${roleDisplay} | Status: ${this.mapUserSta
 		const todaySendRow = await c.env.db.prepare(`SELECT COUNT(*) as cnt FROM email WHERE type = 1 AND DATE(create_time) = ?`).bind(todayStr).first();
 		const deletedUserRow = await c.env.db.prepare(`SELECT COUNT(*) as cnt FROM user WHERE is_del = 1`).first();
 
-		return `📊 <b>/status</b>
+		const healthIcon = this.severityLabel(metrics.systemError24h + metrics.failed24h, 3, 10);
+		const securityIcon = this.severityLabel(metrics.failed24h + metrics.blocked24h, 4, 12);
+
+		return `📊 <b>/status</b> — Main Dashboard
+
+<b>${healthIcon} Platform Health (24h)</b>
+Failed login: <b>${metrics.failed24h}</b> | System error: <b>${metrics.systemError24h}</b>
+Blocked email event: <b>${metrics.blocked24h}</b>
+
+<b>${securityIcon} Security & Bot Runtime</b>
+🤖 Bot enabled: ${metrics.botEnabled ? 'Yes' : 'No'}
+🌐 Push notify: ${metrics.pushEnabled ? 'Yes' : 'No'}
+🔐 Allowed CHAT_ID: ${metrics.allowed.length > 0 ? metrics.allowed.join(', ') : '(empty)'}
 
 <b>👥 Users</b>
-Total: ${numberCount.userTotal} | Deleted: ${deletedUserRow?.cnt || 0}
-New today: ${todayRegRow?.cnt || 0}
+Total: ${metrics.numberCount.userTotal} | Deleted: ${deletedUserRow?.cnt || 0} | New today: ${todayRegRow?.cnt || 0}
 
 <b>📬 Addresses</b>
-Total: ${numberCount.accountTotal}
+Total: ${metrics.numberCount.accountTotal}
 
 <b>📧 Emails</b>
-Received: ${numberCount.receiveTotal} | Sent: ${numberCount.sendTotal}
+Received: ${metrics.numberCount.receiveTotal} | Sent: ${metrics.numberCount.sendTotal}
 Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 
-<b>⚙️ System</b>
-🤖 Bot enabled: ${botEnabled ? 'Yes' : 'No'}
-🔐 Allowed CHAT_ID: ${allowed.length > 0 ? allowed.join(', ') : '(empty)'}
-🌐 Push notify: ${await this.shouldSendWebhookPush(c) ? 'Yes' : 'No'}
-📅 Server time (UTC): ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')}`;
+📅 Server time (UTC): ${metrics.nowUtc}
+
+Tip: gunakan <code>/security</code> untuk detail insiden dan <code>/system</code> untuk detail webhook/log.`;
 	},
 
 	// ─── ENHANCED COMMAND: SECURITY ──────────────────────────────────────────
 
 	async formatSecurityCommand(c) {
 		const { results } = await c.env.db.prepare(`
-			SELECT isc.ip, isc.update_time, isc.data
+			SELECT isc.ip, isc.update_time, isc.data,
+				COUNT(DISTINCT u.user_id) as affectedUsers
 			FROM ip_security_cache isc
 			INNER JOIN user u ON (u.active_ip = isc.ip OR u.create_ip = isc.ip)
 			WHERE u.is_del = 0
@@ -1100,43 +1158,41 @@ Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 			LIMIT 10
 		`).all();
 
-		let linesText = 'No risky IP found in cache.';
+		let riskyLines = 'No risky IP found in cache.';
 		if (results?.length) {
-			linesText = results.map((row, idx) => {
+			riskyLines = results.map((row, idx) => {
 				let detail = {};
 				try { detail = JSON.parse(row.data || '{}'); } catch (_) {}
 				const sec = detail.security || {};
 				const location = detail.location || {};
-				return `${idx + 1}. <code>${row.ip || '-'}</code> | vpn=${sec.vpn ? 'Y' : 'N'} proxy=${sec.proxy ? 'Y' : 'N'} tor=${sec.tor ? 'Y' : 'N'} relay=${sec.relay ? 'Y' : 'N'}
-   📍 ${location.country || '-'} / ${location.city || '-'} | Updated: ${row.update_time || '-'}`;
+				return `${idx + 1}. <code>${row.ip || '-'}</code> users=${row.affectedUsers || 0}\n   🧷 vpn=${sec.vpn ? 'Y' : 'N'} proxy=${sec.proxy ? 'Y' : 'N'} tor=${sec.tor ? 'Y' : 'N'} relay=${sec.relay ? 'Y' : 'N'}\n   📍 ${location.country || '-'} / ${location.city || '-'} | Updated: ${row.update_time || '-'}`;
 			}).join('\n');
 		}
 
-		// Failed login events
 		const failedRows = await c.env.db.prepare(`
 			SELECT log_id as logId, message, create_time as createTime
 			FROM webhook_event_log
 			WHERE event_type = 'auth.login.failed'
 			ORDER BY log_id DESC
-			LIMIT 5
+			LIMIT 6
 		`).all();
 		const failedItems = failedRows?.results || [];
-		const failedPreview = failedItems.map(item => {
-			const oneLine = String(item.message || '').split('\n').slice(0, 2).join(' ').trim();
-			return `• #${item.logId} ${oneLine}\n  At: ${item.createTime || '-'}`;
-		}).join('\n');
+		const failedPreview = failedItems.length
+			? failedItems.map(item => {
+				const oneLine = String(item.message || '').split('\n').slice(0, 1).join(' ').trim();
+				return `• #${item.logId} ${oneLine}\n  At: ${item.createTime || '-'}`;
+			}).join('\n')
+			: '-';
 
-		// ─── NEW: Blacklisted sender blocked events ───────────────────────────
 		const blacklistRows = await c.env.db.prepare(`
-			SELECT log_id as logId, message, meta, create_time as createTime
+			SELECT log_id as logId, event_type as eventType, message, meta, create_time as createTime
 			FROM webhook_event_log
 			WHERE event_type IN ('security.blacklist.blocked', 'security.outbound.blocked')
 			ORDER BY log_id DESC
-			LIMIT 6
+			LIMIT 8
 		`).all();
 		const blacklistItems = blacklistRows?.results || [];
 
-		// Build preview URLs using banLogId stored in meta
 		const { customDomain } = await settingService.query(c);
 		const blacklistPreviewMap = new Map();
 		if (customDomain) {
@@ -1154,48 +1210,42 @@ Today recv: ${todayReceiveRow?.cnt || 0} | Today sent: ${todaySendRow?.cnt || 0}
 			? blacklistItems.map(item => {
 				let meta = {};
 				try { meta = JSON.parse(item.meta || '{}'); } catch (_) {}
-				const isOutbound = item.eventType === 'security.outbound.blocked' ||
-					String(item.message || '').includes('Outbound');
+				const isOutbound = item.eventType === 'security.outbound.blocked' || String(item.message || '').includes('Outbound');
 				const icon = isOutbound ? '📤' : '📥';
 				const dir = isOutbound ? 'OUT' : 'IN';
 				const hasPreview = blacklistPreviewMap.has(item.logId) ? ' 🔎' : '';
-				const actor = isOutbound && meta.actorEmail ? `\n  Actor: <code>${meta.actorEmail}</code> (#${meta.actorUserId || '-'}) IP: ${meta.actorIp || '-'}` : '';
-				return `• ${icon} [${dir}] #${item.logId}${hasPreview} From: <code>${meta.senderEmail || meta.actorEmail || '-'}</code> → <code>${meta.to || meta.toEmail || '-'}</code>\n  Subj: ${meta.subject || '-'} | Rule: ${meta.matchedRule || '-'}${actor}\n  At: ${item.createTime || '-'}`;
+				const actor = isOutbound && meta.actorEmail ? ` | Actor: <code>${meta.actorEmail}</code> (#${meta.actorUserId || '-'})` : '';
+				return `• ${icon}[${dir}] #${item.logId}${hasPreview} <code>${meta.senderEmail || meta.actorEmail || '-'}</code> → <code>${meta.to || meta.toEmail || '-'}</code>\n  Rule: ${meta.matchedRule || '-'}${actor}\n  At: ${item.createTime || '-'}`;
 			}).join('\n')
 			: '-';
-		// ─────────────────────────────────────────────────────────────────────
 
-		const securityButtons = failedItems.map(item => ([{ text: `🧾 Security Event #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }]));
+		const [{ cnt: failed24h = 0 } = {}] = [await c.env.db.prepare(`SELECT COUNT(*) as cnt FROM webhook_event_log WHERE event_type = 'auth.login.failed' AND create_time >= datetime('now', '-24 hour')`).first()];
+		const [{ cnt: blocked24h = 0 } = {}] = [await c.env.db.prepare(`SELECT COUNT(*) as cnt FROM webhook_event_log WHERE event_type IN ('security.blacklist.blocked', 'security.outbound.blocked') AND create_time >= datetime('now', '-24 hour')`).first()];
 
-		// Each blocked email: detail button + preview button (if banLogId exists)
+		const summary = `🧠 Summary (24h): Failed login <b>${failed24h}</b> | Blocked mail <b>${blocked24h}</b> | Risky IP cache <b>${results?.length || 0}</b>`;
+
+		const securityButtons = failedItems.map(item => ([{ text: `🧾 Event #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }]));
 		const blacklistButtons = blacklistItems.map(item => {
 			const row = [{ text: `🚫 Blocked #${item.logId}`, callback_data: `cmd:securityevent:${item.logId}` }];
 			const previewUrl = blacklistPreviewMap.get(item.logId);
-			if (previewUrl) row.push({ text: '🔎 Preview Email', web_app: { url: previewUrl } });
+			if (previewUrl) row.push({ text: '🔎 Preview', web_app: { url: previewUrl } });
 			return row;
 		});
 
 		const replyMarkup = {
 			inline_keyboard: [
+				[{ text: '📊 Status', callback_data: 'cmd:status' }, { text: '🗂 Full Events', callback_data: 'cmd:events:1' }],
 				...securityButtons,
 				...blacklistButtons,
-				[{ text: '🚫 Blacklist', callback_data: 'cmd:blacklist' }, { text: '🔑 Keywords', callback_data: 'cmd:keyword' }],
+				[{ text: '🚫 Blacklist Rules', callback_data: 'cmd:blacklist' }, { text: '🔑 Keyword Rules', callback_data: 'cmd:keyword' }],
 				[{ text: '🏠 Menu', callback_data: 'cmd:menu' }]
 			]
 		};
 
-		return { text: `🔐 <b>/security</b>
-
-<b>⚠️ Risky IPs</b>
-${linesText}
-
-<b>⚠️ Recent failed login events</b>
-${failedPreview || '-'}
-
-<b>🚫 Recent blacklisted sender blocks</b>
-${blacklistPreview}
-
-Tip: tap Security Event button or use <code>/security event &lt;id&gt;</code>.`, replyMarkup };
+		return {
+			text: `🔐 <b>/security dashboard</b>\n\n${summary}\n\n<b>⚠️ Risky IPs (cache)</b>\n${riskyLines}\n\n<b>🔒 Failed login events (latest)</b>\n${failedPreview}\n\n<b>🚫 Blocked email logs (important)</b>\n${blacklistPreview}\n\nTip: tap an event button or run <code>/security event &lt;id&gt;</code> for full detail.`,
+			replyMarkup
+		};
 	},
 
 	async formatSecurityEventDetailCommand(c, eventIdArg) {
@@ -2093,26 +2143,30 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 		const pageArg = Number(args?.[0] || 1);
 		switch (command) {
 			case '/start':
+				return { text: await this.formatStatusCommand(c), replyMarkup: this.buildMainMenu() };
 			case '/help':
 				return {
 					text: `🤖 <b>Abyn Mail Bot — Command Center</b>
 
-📊 /status — System counters + bot state
+📊 /status — Main dashboard (overview + runtime + counters)
+🔐 /security — Security dashboard (risky IP + blocked logs)
+🧭 /system — Webhook health + recent errors
+
 👥 /users [page] — Users list with quota info
-📨 /mail [page|emailId] — Emails with pager or detail
-📬 /recent — Last 10 emails across all users
-🛡️ /role — Role quota + authorization flags
-🔐 /security — Risky IPs, failed logins, blacklist
-🌐 /whois &lt;ip&gt; — IP intelligence lookup
-📈 /stats [range|top|bounce] — Email &amp; user stats
-🧭 /system — Webhook health + event logs
-🗂 /events [page] — Webhook/system event log
-🧾 /event &lt;id&gt; — Event detail + preview
 👤 /user &lt;id&gt; — User detail with role, quota, progress bars
 📧 /usermail &lt;userId&gt; [page] — List a user's emails
-🔄 /resetquota &lt;userId&gt; — Reset user send quota to 0
+📨 /mail [page|emailId] — Emails with pager or detail
+📬 /recent — Last 10 emails across all users
+
+📈 /stats [range|top|bounce] — Email &amp; user stats
+🗂 /events [page] — Webhook/system event log
+🧾 /event &lt;id&gt; — Event detail + preview
+🛡️ /role — Role quota + authorization flags
 🎟️ /invite [page] — Invite codes with usage history
 🔎 /search [type] [query] — Search user/email/invite/role/ip
+🌐 /whois &lt;ip&gt; — IP intelligence lookup
+
+🔄 /resetquota &lt;userId&gt; — Reset user send quota to 0
 🚫 /ban &lt;userId&gt; — Ban a user
 ✅ /unban &lt;userId&gt; — Unban a user
 🆔 /chatid — Your chat_id / user_id
@@ -2133,7 +2187,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 • <code>/stats bounce</code> — bounced/failed emails
 
 🔐 <b>Security</b>
-• <code>/security</code> — overview dashboard
+• <code>/security</code> — dashboard detail security
 • <code>/security event &lt;id&gt;</code> — event detail
 • <code>/security blacklist add spammer@evil.com</code>
 • <code>/security blacklist add evil.com</code>
@@ -2226,7 +2280,9 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 			let command = '/help';
 			let args = [];
 
-			if (callback.data === 'cmd:menu' || callback.data === 'cmd:help') {
+			if (callback.data === 'cmd:menu') {
+				command = '/status';
+			} else if (callback.data === 'cmd:help') {
 				command = '/help';
 			} else {
 				const pagingMatch = /^cmd:(mail|users|invite|events):(\d+)$/.exec(callback.data);
