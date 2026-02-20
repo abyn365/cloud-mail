@@ -201,32 +201,38 @@ onBeforeUnmount(() => {
 
 .toolbar {
   display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
   flex: 0 0 auto;
 }
 
 .id-input {
-  width: 170px;
-  min-width: 140px;
+  width: 190px;
 }
 
 .keyword-input {
-  min-width: 220px;
-  flex: 1;
+  width: 190px;
 }
 
 .action-group {
   display: flex;
-  gap: 8px;
-  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+  width: 190px;
+}
+
+.action-group :deep(.el-button) {
+  width: 100%;
+  margin-left: 0;
 }
 
 .table-wrap {
   flex: 1;
   min-height: 220px;
   overflow: hidden;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
 }
 
 .table-scroll {
