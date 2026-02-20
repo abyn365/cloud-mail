@@ -64,6 +64,12 @@
           <Icon icon="eos-icons:system-ok-outlined" width="18" height="18" style="margin-left: 2px" />
           <span class="menu-name" style="margin-left: 22px">{{$t('SystemSettings')}}</span>
         </el-menu-item>
+
+        <el-menu-item @click="router.push({name: 'webhook-event'})" index="webhook-event" v-perm="'setting:query'"
+                      :class="route.meta.name === 'webhook-event' ? 'choose-item' : ''">
+          <Icon icon="hugeicons:ai-security-01" width="20" height="20" />
+          <span class="menu-name" style="margin-left: 21px">{{$t('eventLogs')}}</span>
+        </el-menu-item>
       </el-menu>
     </div>
   </el-scrollbar>

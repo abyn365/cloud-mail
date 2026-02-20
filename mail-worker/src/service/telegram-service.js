@@ -768,7 +768,7 @@ Blocked at: ${row.createTime} UTC<br>
 			inline_keyboard: [
 				[{ text: '👤 User/Address', callback_data: 'cmd:searchhelp:user' }, { text: '📨 Email ID', callback_data: 'cmd:searchhelp:email' }],
 				[{ text: '🎟 Invite Code', callback_data: 'cmd:searchhelp:invite' }, { text: '🛡 Role', callback_data: 'cmd:searchhelp:role' }],
-				[{ text: '🌐 IP Lookup', callback_data: 'cmd:whois:help' }],
+				[{ text: '🧾 Event ID', callback_data: 'cmd:searchhelp:event' }, { text: '🌐 IP Lookup', callback_data: 'cmd:whois:help' }],
 				[{ text: '🏠 Menu', callback_data: 'cmd:menu' }]
 			]
 		};
@@ -798,7 +798,8 @@ Blocked at: ${row.createTime} UTC<br>
 		if (scope === 'email') return `🔎 <b>/search email</b>\nExample: <code>/search email 121</code>`;
 		if (scope === 'invite') return `🔎 <b>/search invite</b>\nExample:\n• <code>/search invite 6</code>\n• <code>/search invite CODE123</code>`;
 		if (scope === 'role') return `🔎 <b>/search role</b>\nExample:\n• <code>/search role 1</code>\n• <code>/search role normal users</code>`;
-		return `🔎 <b>/search</b>\nUse menu or command:\n• <code>/search user &lt;userId|email&gt;</code>\n• <code>/search email &lt;emailId&gt;</code>\n• <code>/search invite &lt;id|code&gt;</code>\n• <code>/search role &lt;id|name&gt;</code>\n• <code>/search ip &lt;ip&gt;</code>`;
+		if (scope === 'event') return `🔎 <b>/search event</b>\nExample: <code>/search event 128</code>`;
+		return `🔎 <b>/search</b>\nUse menu or command:\n• <code>/search user &lt;userId|email&gt;</code>\n• <code>/search email &lt;emailId&gt;</code>\n• <code>/search invite &lt;id|code&gt;</code>\n• <code>/search role &lt;id|name&gt;</code>\n• <code>/search event &lt;eventId&gt;</code>\n• <code>/search ip &lt;ip&gt;</code>`;
 	},
 
 	async queryRecentActivity(c, { userId = null, address = null, accountId = null, ip = null }, limit = 5) {
@@ -1619,6 +1620,11 @@ ${historyText}`;
 		if (!type) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
 		if (type === 'ip') return await this.formatWhoisCommand(c, query);
 		if (type === 'email') return await this.formatMailDetailCommand(c, query, 1);
+		if (type === 'event') {
+			if (!query) return { text: this.formatSearchHelp('event'), replyMarkup: this.buildSearchMenu() };
+			if (!/^\d+$/.test(query)) return { text: `🔎 Event id harus angka: <code>${this.escapeHtml(query)}</code>`, replyMarkup: this.buildSearchMenu() };
+			return await this.formatEventDetailCommand(c, Number(query), { backText: '🔎 Search', backCallbackData: 'cmd:search' });
+		}
 		if (type === 'invite') {
 			if (!query) return { text: this.formatSearchHelp('invite'), replyMarkup: this.buildSearchMenu() };
 			let row = null;
@@ -2202,6 +2208,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 • <code>/search email 121</code> — by email ID
 • <code>/search invite CODE123</code>
 • <code>/search role admin</code>
+• <code>/search event 128</code>
 • <code>/search ip 1.2.3.4</code>`,
 					replyMarkup: this.buildMainMenu()
 				};
@@ -2256,7 +2263,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 			case '/search':
 			case '/searchs':
 				if (!args?.[0]) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
-				if (['user','email','invite','role','ip'].includes(args[0]) && !args[1]) {
+				if (['user','email','invite','role','event','ip'].includes(args[0]) && !args[1]) {
 					return { text: this.formatSearchHelp(args[0]), replyMarkup: this.buildSearchMenu() };
 				}
 				return await this.formatSearchCommand(c, args?.[0], args?.slice(1));
@@ -2302,8 +2309,8 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 				} else if (/^cmd:inviteid:(\d+):(\d+)$/.test(callback.data)) {
 					const m = /^cmd:inviteid:(\d+):(\d+)$/.exec(callback.data);
 					command = '/invite'; args = ['detail', m[1], m[2]];
-				} else if (/^cmd:searchhelp:(user|email|invite|role)$/.test(callback.data)) {
-					const m = /^cmd:searchhelp:(user|email|invite|role)$/.exec(callback.data);
+				} else if (/^cmd:searchhelp:(user|email|invite|role|event)$/.test(callback.data)) {
+					const m = /^cmd:searchhelp:(user|email|invite|role|event)$/.exec(callback.data);
 					command = '/search'; args = [m[1]];
 				} else if (callback.data === 'cmd:search') {
 					command = '/search';
