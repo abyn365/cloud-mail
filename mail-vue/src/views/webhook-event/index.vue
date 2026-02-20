@@ -27,22 +27,31 @@
     </div>
 
     <div class="table-wrap">
-      <el-table :data="rows" border stripe v-loading="loading" :height="tableHeight">
-        <el-table-column prop="logId" :label="$t('eventId')" width="100" />
-        <el-table-column prop="eventType" :label="$t('eventType')" min-width="220" />
-        <el-table-column prop="level" :label="$t('level')" width="100" />
-        <el-table-column :label="$t('message')" min-width="340">
-          <template #default="{ row }">
-            <div class="line-clamp">{{ row.message }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column prop="createTime" :label="$t('createdAt')" width="190" />
-        <el-table-column :label="$t('action')" width="110" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="openDetail(row)">{{ $t('details') }}</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <el-scrollbar class="table-scroll" always>
+        <el-table
+          :data="rows"
+          border
+          stripe
+          v-loading="loading"
+          :height="tableHeight"
+          :style="{ minWidth: tableMinWidth + 'px' }"
+        >
+          <el-table-column prop="logId" :label="$t('eventId')" width="100" fixed="left" />
+          <el-table-column prop="eventType" :label="$t('eventType')" min-width="220" />
+          <el-table-column prop="level" :label="$t('level')" width="100" />
+          <el-table-column :label="$t('message')" min-width="420">
+            <template #default="{ row }">
+              <div class="line-clamp">{{ row.message }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="createTime" :label="$t('createdAt')" width="190" />
+          <el-table-column :label="$t('action')" width="110" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="openDetail(row)">{{ $t('details') }}</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-scrollbar>
     </div>
 
     <div class="pager" ref="pagerRef">
@@ -106,6 +115,7 @@ const prettyMeta = computed(() => {
 })
 
 const dialogWidth = computed(() => (window.innerWidth < 768 ? '95vw' : '760px'))
+const tableMinWidth = computed(() => (window.innerWidth < 768 ? 980 : 1140))
 
 function sanitizeEventId(raw) {
   const n = Number(raw)
@@ -117,9 +127,9 @@ function updateTableHeight() {
   const toolbarH = toolbarRef.value?.offsetHeight || 58
   const pagerH = pagerRef.value?.offsetHeight || 40
   const pageHead = 64
-  const pagePadding = window.innerWidth < 768 ? 42 : 52
+  const pagePadding = window.innerWidth < 768 ? 46 : 56
   const reserve = toolbarH + pagerH + pageHead + pagePadding
-  tableHeight.value = Math.max(250, viewport - reserve)
+  tableHeight.value = Math.max(220, viewport - reserve)
 }
 
 function loadList() {
@@ -166,7 +176,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .event-page {
   padding: 10px;
-  min-height: calc(100dvh - 140px);
+  height: calc(100dvh - 140px);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -176,6 +186,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 0 0 auto;
 }
 
 .title {
@@ -193,10 +204,12 @@ onBeforeUnmount(() => {
   gap: 10px;
   flex-wrap: wrap;
   align-items: center;
+  flex: 0 0 auto;
 }
 
 .id-input {
   width: 170px;
+  min-width: 140px;
 }
 
 .keyword-input {
@@ -207,11 +220,17 @@ onBeforeUnmount(() => {
 .action-group {
   display: flex;
   gap: 8px;
+  flex: 0 0 auto;
 }
 
 .table-wrap {
   flex: 1;
-  min-height: 250px;
+  min-height: 220px;
+  overflow: hidden;
+}
+
+.table-scroll {
+  height: 100%;
 }
 
 .line-clamp {
@@ -224,6 +243,7 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: flex-end;
   overflow-x: auto;
+  flex: 0 0 auto;
 }
 
 .detail {
@@ -241,7 +261,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 767px) {
   .event-page {
-    min-height: calc(100dvh - 110px);
+    height: calc(100dvh - 112px);
     padding: 8px;
   }
 
