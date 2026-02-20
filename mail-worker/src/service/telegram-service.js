@@ -696,6 +696,15 @@ Blocked at: ${row.createTime} UTC<br>
 
 	// ─── MENU BUILDERS ────────────────────────────────────────────────────────
 
+
+	appendRefreshButton(replyMarkup, callbackData = 'cmd:refresh:status', label = '🔄 Refresh') {
+		const safeMarkup = replyMarkup && Array.isArray(replyMarkup.inline_keyboard)
+			? { inline_keyboard: [...replyMarkup.inline_keyboard] }
+			: { inline_keyboard: [] };
+		safeMarkup.inline_keyboard.push([{ text: label, callback_data: callbackData }]);
+		return safeMarkup;
+	},
+
 	buildMainMenu() {
 		return {
 			inline_keyboard: [
@@ -2255,8 +2264,10 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 • <code>/search ip 1.2.3.4</code>`,
 					replyMarkup: this.buildMainMenu()
 				};
-			case '/recent':
-				return await this.formatRecentCommand(c);
+			case '/recent': {
+				const result = await this.formatRecentCommand(c);
+				return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:recent') };
+			}
 			case '/resetquota':
 				return await this.formatResetQuotaCommand(c, args?.[0]);
 			case '/usermail':
@@ -2278,24 +2289,35 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 				if (args?.[0] && /^\d+$/.test(String(args[0])) && Number(args[0]) > 50) return await this.formatInviteDetailCommand(c, args[0], 1);
 				return await this.formatInviteCommand(c, pageArg);
 			case '/status':
-				return { text: await this.formatStatusCommand(c), replyMarkup: this.buildMainMenu() };
+				return { text: await this.formatStatusCommand(c), replyMarkup: this.appendRefreshButton(this.buildMainMenu(), 'cmd:refresh:status') };
 			case '/chatid':
 				return { text: `🆔 chat_id: <code>${chatId}</code>\n👤 user_id: <code>${userId || '-'}</code>`, replyMarkup: this.buildMainMenu() };
 			case '/system':
-				return { text: await this.formatSystemCommand(c), replyMarkup: this.buildMainMenu() };
+				return { text: await this.formatSystemCommand(c), replyMarkup: this.appendRefreshButton(this.buildMainMenu(), 'cmd:refresh:system') };
 			case '/security':
 				if (args?.[0] === 'event') return await this.formatSecurityEventDetailCommand(c, args?.[1]);
-				if (args?.[0] === 'blacklist') return await this.formatSecurityBlacklistCommand(c, args?.[1], args?.[2]);
-				if (args?.[0] === 'keyword') return await this.formatSecurityKeywordCommand(c, args?.[1], args?.[2]);
-				return await this.formatSecurityCommand(c);
+				if (args?.[0] === 'blacklist') {
+					const result = await this.formatSecurityBlacklistCommand(c, args?.[1], args?.[2]);
+					return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:security:blacklist') };
+				}
+				if (args?.[0] === 'keyword') {
+					const result = await this.formatSecurityKeywordCommand(c, args?.[1], args?.[2]);
+					return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:security:keyword') };
+				}
+				{
+					const result = await this.formatSecurityCommand(c);
+					return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:security') };
+				}
 			case '/whois':
 				return await this.formatWhoisCommand(c, args?.[0]);
 			case '/stats':
 				return await this.formatStatsCommand(c, args?.[0] || '7d');
-			case '/events':
-				if (args?.[0] === 'page') return await this.formatEventsCommand(c, Number(args?.[1] || 1));
-				if (args?.[0]) return await this.formatEventDetailCommand(c, args[0]);
-				return await this.formatEventsCommand(c, pageArg);
+			case '/events': {
+				if (args?.[0] && args?.[0] !== 'page') return await this.formatEventDetailCommand(c, args[0]);
+				const currentPage = Math.max(1, Number(args?.[0] === 'page' ? args?.[1] : pageArg));
+				const result = await this.formatEventsCommand(c, currentPage);
+				return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, `cmd:refresh:events:${currentPage}`) };
+			}
 			case '/event':
 				if (args?.[0] === 'user') return await this.formatEventDetailCommand(c, args?.[1], { backText: '👤 User Detail', backCallbackData: `cmd:userid:${args?.[2] || 1}:${args?.[3] || 1}` });
 				return await this.formatEventDetailCommand(c, args?.[0], { backPage: args?.[1] });
@@ -2309,7 +2331,14 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 				if (['user','email','invite','role','event','keyword','kw','ip'].includes(args[0]) && !args[1]) {
 					return { text: this.formatSearchHelp(args[0]), replyMarkup: this.buildSearchMenu() };
 				}
-				return await this.formatSearchCommand(c, args?.[0], args?.slice(1));
+				{
+					const result = await this.formatSearchCommand(c, args?.[0], args?.slice(1));
+					const searchType = String(args?.[0] || '').toLowerCase();
+					if (searchType === 'event' && args?.[1]) {
+						return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, `cmd:refresh:search:event:${Number(args[1]) || 0}`) };
+					}
+					return result;
+				}
 			default:
 				return await this.resolveCommand(c, '/help', [], chatId, userId);
 		}
@@ -2394,8 +2423,24 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 					command = '/event'; args = [m[1], '1'];
 				} else if (callback.data === 'cmd:stats:7d') {
 					command = '/stats'; args = ['7d'];
-				} else if (callback.data === 'cmd:whois:help') {
-					command = '/whois'; args = ['help'];
+				} else if (/^cmd:refresh:/.test(callback.data)) {
+					const parts = callback.data.split(':');
+					const scope = parts[2] || 'status';
+					if (scope === 'status') {
+						command = '/status';
+					} else if (scope === 'system') {
+						command = '/system';
+					} else if (scope === 'security') {
+						command = '/security';
+						if (parts[3] === 'blacklist') args = ['blacklist'];
+						if (parts[3] === 'keyword') args = ['keyword'];
+					} else if (scope === 'events') {
+						command = '/events'; args = ['page', String(Math.max(1, Number(parts[3] || 1)))];
+					} else if (scope === 'recent') {
+						command = '/recent';
+					} else if (scope === 'search' && parts[3] === 'event') {
+						command = '/search'; args = ['event', String(Math.max(1, Number(parts[4] || 0)))];
+					}
 				} else {
 					const single = /^cmd:(status|role|chatid|system|security|recent)$/.exec(callback.data);
 					if (single) command = `/${single[1]}`;

@@ -168,6 +168,16 @@ const routers = {
             menu: true
         }
     }],
+    'setting:event-log:query': [{
+        path: '/event-log',
+        name: 'webhook-event',
+        component: () => import('@/views/webhook-event/index.vue'),
+        meta: {
+            title: 'eventLogs',
+            name: 'webhook-event',
+            menu: true
+        }
+    }],
     'reg-key:query': [{
         path: '/invite-code',
         name: 'reg-key',

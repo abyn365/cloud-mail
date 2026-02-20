@@ -97,6 +97,7 @@ const detail = ref({})
 const tableHeight = ref(420)
 const toolbarRef = ref(null)
 const pagerRef = ref(null)
+const autoRefreshTimer = ref(null)
 
 const params = reactive({
   page: 1,
@@ -162,14 +163,38 @@ function openDetail(row) {
   })
 }
 
+function stopAutoRefresh() {
+  if (autoRefreshTimer.value) {
+    clearInterval(autoRefreshTimer.value)
+    autoRefreshTimer.value = null
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh()
+  autoRefreshTimer.value = setInterval(() => {
+    if (document.hidden || detailVisible.value) return
+    loadList()
+  }, 15000)
+}
+
+function handleVisibilityChange() {
+  if (document.hidden) return
+  loadList()
+}
+
 onMounted(() => {
   nextTick(() => updateTableHeight())
   window.addEventListener('resize', updateTableHeight)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   loadList()
+  startAutoRefresh()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateTableHeight)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  stopAutoRefresh()
 })
 </script>
 
