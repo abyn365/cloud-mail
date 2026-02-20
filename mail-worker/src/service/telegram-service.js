@@ -646,11 +646,33 @@ Blocked at: ${row.createTime} UTC<br>
 		}
 	},
 
+	async clearLastBotMessageId(c, chatId) {
+		if (!chatId) return;
+		try {
+			await this.ensureChatStateTable(c);
+			await c.env.db.prepare('DELETE FROM tg_chat_state WHERE chat_id = ?').bind(String(chatId)).run();
+		} catch (e) {
+			console.error('Failed to clear tg_chat_state:', e.message);
+		}
+	},
+
 	async sendOrEditSingleChatMessage(c, chatId, message, replyMarkup = null) {
 		const previousMessageId = await this.getLastBotMessageId(c, chatId);
 		if (previousMessageId) {
 			const edited = await this.editTelegramReply(c, chatId, previousMessageId, message, replyMarkup);
 			if (edited) return { messageId: previousMessageId, edited: true };
+		}
+		const sent = await this.sendTelegramReply(c, chatId, message, replyMarkup);
+		const messageId = sent?.message_id;
+		if (messageId) await this.saveLastBotMessageId(c, chatId, messageId);
+		return { messageId: messageId || null, edited: false };
+	},
+
+	async sendFreshCommandReply(c, chatId, message, replyMarkup = null) {
+		const previousMessageId = await this.getLastBotMessageId(c, chatId);
+		if (previousMessageId) {
+			await this.deleteTelegramMessage(c, chatId, previousMessageId);
+			await this.clearLastBotMessageId(c, chatId);
 		}
 		const sent = await this.sendTelegramReply(c, chatId, message, replyMarkup);
 		const messageId = sent?.message_id;
@@ -768,7 +790,8 @@ Blocked at: ${row.createTime} UTC<br>
 			inline_keyboard: [
 				[{ text: '👤 User/Address', callback_data: 'cmd:searchhelp:user' }, { text: '📨 Email ID', callback_data: 'cmd:searchhelp:email' }],
 				[{ text: '🎟 Invite Code', callback_data: 'cmd:searchhelp:invite' }, { text: '🛡 Role', callback_data: 'cmd:searchhelp:role' }],
-				[{ text: '🧾 Event ID', callback_data: 'cmd:searchhelp:event' }, { text: '🌐 IP Lookup', callback_data: 'cmd:whois:help' }],
+				[{ text: '🧾 Event ID', callback_data: 'cmd:searchhelp:event' }, { text: '🔤 Keyword', callback_data: 'cmd:searchhelp:keyword' }],
+				[{ text: '🌐 IP Lookup', callback_data: 'cmd:whois:help' }],
 				[{ text: '🏠 Menu', callback_data: 'cmd:menu' }]
 			]
 		};
@@ -799,7 +822,8 @@ Blocked at: ${row.createTime} UTC<br>
 		if (scope === 'invite') return `🔎 <b>/search invite</b>\nExample:\n• <code>/search invite 6</code>\n• <code>/search invite CODE123</code>`;
 		if (scope === 'role') return `🔎 <b>/search role</b>\nExample:\n• <code>/search role 1</code>\n• <code>/search role normal users</code>`;
 		if (scope === 'event') return `🔎 <b>/search event</b>\nExample: <code>/search event 128</code>`;
-		return `🔎 <b>/search</b>\nUse menu or command:\n• <code>/search user &lt;userId|email&gt;</code>\n• <code>/search email &lt;emailId&gt;</code>\n• <code>/search invite &lt;id|code&gt;</code>\n• <code>/search role &lt;id|name&gt;</code>\n• <code>/search event &lt;eventId&gt;</code>\n• <code>/search ip &lt;ip&gt;</code>`;
+		if (scope === 'keyword') return `🔎 <b>/search keyword</b>\nExample: <code>/search keyword delete</code>`;
+		return `🔎 <b>/search</b>\nUse menu or command:\n• <code>/search user &lt;userId|email&gt;</code>\n• <code>/search email &lt;emailId&gt;</code>\n• <code>/search invite &lt;id|code&gt;</code>\n• <code>/search role &lt;id|name&gt;</code>\n• <code>/search event &lt;eventId&gt;</code>\n• <code>/search keyword &lt;text&gt;</code>\n• <code>/search ip &lt;ip&gt;</code>`;
 	},
 
 	async queryRecentActivity(c, { userId = null, address = null, accountId = null, ip = null }, limit = 5) {
@@ -1625,6 +1649,24 @@ ${historyText}`;
 			if (!/^\d+$/.test(query)) return { text: `🔎 Event id harus angka: <code>${this.escapeHtml(query)}</code>`, replyMarkup: this.buildSearchMenu() };
 			return await this.formatEventDetailCommand(c, Number(query), { backText: '🔎 Search', backCallbackData: 'cmd:search' });
 		}
+		if (type === 'keyword' || type === 'kw') {
+			if (!query) return { text: this.formatSearchHelp('keyword'), replyMarkup: this.buildSearchMenu() };
+			const { results } = await c.env.db.prepare(`
+				SELECT log_id as logId, event_type as eventType, level, message, create_time as createTime
+				FROM webhook_event_log
+				WHERE event_type LIKE ? OR message LIKE ? OR COALESCE(meta, '') LIKE ?
+				ORDER BY log_id DESC
+				LIMIT 6
+			`).bind(`%${query}%`, `%${query}%`, `%${query}%`).all();
+			const items = results || [];
+			if (!items.length) return { text: `🔎 No event matched keyword: <code>${this.escapeHtml(query)}</code>`, replyMarkup: this.buildSearchMenu() };
+			const body = items.map(i => `• #${i.logId} [${i.level}] ${i.eventType}\n  ${(String(i.message || '').split('\n')[0] || '-').slice(0, 120)}\n  At: ${i.createTime || '-'}`).join('\n');
+			const buttons = items.map(i => ([{ text: `🧾 Event #${i.logId}`, callback_data: `cmd:event:${i.logId}:1` }]));
+			return {
+				text: `🔎 <b>Search Result: keyword</b>\nKeyword: <code>${this.escapeHtml(query)}</code>\n\n${body}`,
+				replyMarkup: { inline_keyboard: [...buttons, [{ text: '🔎 Search Menu', callback_data: 'cmd:search' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]] }
+			};
+		}
 		if (type === 'invite') {
 			if (!query) return { text: this.formatSearchHelp('invite'), replyMarkup: this.buildSearchMenu() };
 			let row = null;
@@ -2209,6 +2251,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 • <code>/search invite CODE123</code>
 • <code>/search role admin</code>
 • <code>/search event 128</code>
+• <code>/search keyword delete</code>
 • <code>/search ip 1.2.3.4</code>`,
 					replyMarkup: this.buildMainMenu()
 				};
@@ -2263,7 +2306,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 			case '/search':
 			case '/searchs':
 				if (!args?.[0]) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
-				if (['user','email','invite','role','event','ip'].includes(args[0]) && !args[1]) {
+				if (['user','email','invite','role','event','keyword','kw','ip'].includes(args[0]) && !args[1]) {
 					return { text: this.formatSearchHelp(args[0]), replyMarkup: this.buildSearchMenu() };
 				}
 				return await this.formatSearchCommand(c, args?.[0], args?.slice(1));
@@ -2309,8 +2352,8 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 				} else if (/^cmd:inviteid:(\d+):(\d+)$/.test(callback.data)) {
 					const m = /^cmd:inviteid:(\d+):(\d+)$/.exec(callback.data);
 					command = '/invite'; args = ['detail', m[1], m[2]];
-				} else if (/^cmd:searchhelp:(user|email|invite|role|event)$/.test(callback.data)) {
-					const m = /^cmd:searchhelp:(user|email|invite|role|event)$/.exec(callback.data);
+				} else if (/^cmd:searchhelp:(user|email|invite|role|event|keyword)$/.test(callback.data)) {
+					const m = /^cmd:searchhelp:(user|email|invite|role|event|keyword)$/.exec(callback.data);
 					command = '/search'; args = [m[1]];
 				} else if (callback.data === 'cmd:search') {
 					command = '/search';
@@ -2393,7 +2436,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 		let reply = result.text;
 		if (reply.length > 3800) reply = `${reply.slice(0, 3800)}\n\n...truncated`;
 
-		await this.sendOrEditSingleChatMessage(c, chatId, reply, result.replyMarkup);
+		await this.sendFreshCommandReply(c, chatId, reply, result.replyMarkup);
 
 		if (userMessageId && message?.from?.id) {
 			await this.deleteTelegramMessage(c, chatId, userMessageId);
