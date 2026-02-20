@@ -23,7 +23,7 @@
         <div>{{$t('emailAccount')}}</div>
         <div>{{ userStore.user.email }}</div>
       </div>
-      <div class="item">
+      <div class="item" v-perm="'my:reset-pwd'">
         <div>{{$t('password')}}</div>
         <div>
           <el-button type="primary" @click="pwdShow = true">{{$t('changePwdBtn')}}</el-button>
@@ -46,7 +46,7 @@
         <el-button type="primary" @click="deleteConfirm">{{$t('deleteUserBtn')}}</el-button>
       </div>
     </div>
-    <el-dialog v-model="pwdShow" :title="$t('changePassword')" width="340">
+    <el-dialog v-model="pwdShow" :title="$t('changePassword')" width="340" v-if="userStore.user.permKeys?.includes('my:reset-pwd') || userStore.user.permKeys?.includes('*')">
       <div class="update-pwd">
         <el-input type="password" :placeholder="$t('newPassword')" v-model="form.password" autocomplete="off"/>
         <el-input type="password" :placeholder="$t('confirmPassword')" v-model="form.newPwd" autocomplete="off"/>
