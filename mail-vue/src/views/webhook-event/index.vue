@@ -207,29 +207,27 @@ onBeforeUnmount(() => {
 
 .toolbar {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
   flex: 0 0 auto;
 }
 
 .id-input {
-  width: 190px;
+  width: 240px;
 }
 
 .keyword-input {
-  width: 190px;
+  width: min(420px, 48vw);
 }
 
 .action-group {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 190px;
+  gap: 8px;
 }
 
 .action-group :deep(.el-button) {
-  width: 100%;
+  min-width: 110px;
   margin-left: 0;
 }
 
@@ -282,6 +280,11 @@ onBeforeUnmount(() => {
     padding: 8px;
   }
 
+  .toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
   .id-input,
   .keyword-input,
   .action-group {
@@ -289,8 +292,13 @@ onBeforeUnmount(() => {
     min-width: 100%;
   }
 
+  .action-group {
+    flex-direction: column;
+    gap: 6px;
+  }
+
   .action-group :deep(.el-button) {
-    flex: 1;
+    width: 100%;
   }
 
   .pager {
