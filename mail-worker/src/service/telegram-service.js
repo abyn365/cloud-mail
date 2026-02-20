@@ -726,6 +726,18 @@ Blocked at: ${row.createTime} UTC<br>
 		};
 	},
 
+
+	buildAdminShortcutMenu() {
+		return {
+			inline_keyboard: [
+				[{ text: '👥 User List', callback_data: 'cmd:admin:user:list:1' }, { text: '🎟️ Invite List', callback_data: 'cmd:admin:invite:list:1' }],
+				[{ text: '🛡️ Role List', callback_data: 'cmd:admin:role:list' }, { text: '📬 Account Help', callback_data: 'cmd:admin:account' }],
+				[{ text: '📧 Email Delete Help', callback_data: 'cmd:admin:email' }],
+				[{ text: '⬅️ Back', callback_data: 'cmd:menu' }, { text: '🏠 Menu', callback_data: 'cmd:menu' }]
+			]
+		};
+	},
+
 	severityLabel(value, warnThreshold, dangerThreshold, reverse = false) {
 		const safeValue = Number(value || 0);
 		if (reverse) {
@@ -1569,7 +1581,7 @@ Gunakan command admin agar terorganisir:
 • <code>/admin role add NAME [sendType] [sendCount] [accountCount]</code>
 • <code>/admin role default ROLE_ID</code>
 • <code>/admin role delete ROLE_ID</code>`,
-				replyMarkup: this.buildMainMenu()
+				replyMarkup: this.buildAdminShortcutMenu()
 			};
 		}
 
@@ -1638,6 +1650,7 @@ Gunakan command admin agar terorganisir:
 
 		if (scope === 'account') {
 			const sub = String(args?.[1] || '').toLowerCase();
+			if (!sub || sub === 'help') return { text: `📬 <b>/admin account</b>\n\n• <code>/admin account add USER_ID alias@domain.com</code>\n• <code>/admin account delete ACCOUNT_ID</code>`, replyMarkup: this.buildAdminShortcutMenu() };
 			if (sub === 'add') {
 				const userId = Number(args?.[2] || 0);
 				const emailAddr = String(args?.[3] || '').trim().toLowerCase();
@@ -1657,6 +1670,7 @@ Gunakan command admin agar terorganisir:
 
 		if (scope === 'email') {
 			const sub = String(args?.[1] || '').toLowerCase();
+			if (!sub || sub === 'help') return { text: `📧 <b>/admin email</b>\n\n• <code>/admin email soft EMAIL_ID</code>\n• <code>/admin email hard EMAIL_ID</code>\n• <code>/admin email purge</code>`, replyMarkup: this.buildAdminShortcutMenu() };
 			const emailId = Number(args?.[2] || 0);
 			if (sub === 'soft') {
 				if (!emailId) return { text: 'Usage: <code>/admin email soft EMAIL_ID</code>', replyMarkup: this.buildMainMenu() };
@@ -2439,7 +2453,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 • <code>/search event 128</code>
 • <code>/search keyword delete</code>
 • <code>/search ip 1.2.3.4</code>`,
-					replyMarkup: this.buildMainMenu()
+					replyMarkup: this.buildAdminShortcutMenu()
 				};
 			case '/recent': {
 				const result = await this.formatRecentCommand(c);
@@ -2573,6 +2587,20 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 					const uRow = await c.env.db.prepare('SELECT status FROM user WHERE user_id = ?').bind(uid).first();
 					const isBanned = uRow?.status === 1;
 					command = '/admin'; args = ['user', isBanned ? 'unban' : 'ban', String(uid)];
+				} else if (callback.data === 'cmd:admin') {
+					command = '/admin';
+				} else if (/^cmd:admin:user:list:(\d+)$/.test(callback.data)) {
+					const m = /^cmd:admin:user:list:(\d+)$/.exec(callback.data);
+					command = '/admin'; args = ['user', 'list', m[1]];
+				} else if (/^cmd:admin:invite:list:(\d+)$/.test(callback.data)) {
+					const m = /^cmd:admin:invite:list:(\d+)$/.exec(callback.data);
+					command = '/admin'; args = ['invite', 'list', m[1]];
+				} else if (callback.data === 'cmd:admin:role:list') {
+					command = '/admin'; args = ['role', 'list'];
+				} else if (callback.data === 'cmd:admin:account') {
+					command = '/admin'; args = ['account', 'help'];
+				} else if (callback.data === 'cmd:admin:email') {
+					command = '/admin'; args = ['email', 'help'];
 				} else if (callback.data === 'cmd:blacklist') {
 					command = '/security'; args = ['blacklist'];
 				} else if (callback.data === 'cmd:keyword') {
