@@ -1,6 +1,11 @@
 <template>
   <div class="event-page">
-    <div class="toolbar">
+    <div class="page-head">
+      <div class="title">{{ $t('eventLogs') }}</div>
+      <div class="subtitle">{{ $t('eventType') }} / {{ $t('level') }} / {{ $t('createdAt') }}</div>
+    </div>
+
+    <div class="toolbar" ref="toolbarRef">
       <el-input
         v-model="params.eventId"
         :placeholder="`${$t('eventId')} (#)`"
@@ -15,8 +20,10 @@
         class="keyword-input"
         @keyup.enter="loadList"
       />
-      <el-button type="primary" @click="loadList">{{ $t('search') }}</el-button>
-      <el-button @click="resetSearch">{{ $t('reset') }}</el-button>
+      <div class="action-group">
+        <el-button type="primary" @click="loadList">{{ $t('search') }}</el-button>
+        <el-button @click="resetSearch">{{ $t('reset') }}</el-button>
+      </div>
     </div>
 
     <div class="table-wrap">
@@ -38,7 +45,7 @@
       </el-table>
     </div>
 
-    <div class="pager">
+    <div class="pager" ref="pagerRef">
       <el-pagination
         v-model:current-page="params.page"
         v-model:page-size="params.size"
@@ -68,7 +75,7 @@
 </template>
 
 <script setup>
-import { computed, defineOptions, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, defineOptions, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { webhookEventDetail, webhookEventList } from '@/request/webhook-event.js'
 
 defineOptions({ name: 'webhook-event' })
@@ -79,6 +86,8 @@ const rows = ref([])
 const detailVisible = ref(false)
 const detail = ref({})
 const tableHeight = ref(420)
+const toolbarRef = ref(null)
+const pagerRef = ref(null)
 
 const params = reactive({
   page: 1,
@@ -105,8 +114,12 @@ function sanitizeEventId(raw) {
 
 function updateTableHeight() {
   const viewport = window.innerHeight || 760
-  const reserve = window.innerWidth < 768 ? 260 : 240
-  tableHeight.value = Math.max(260, viewport - reserve)
+  const toolbarH = toolbarRef.value?.offsetHeight || 58
+  const pagerH = pagerRef.value?.offsetHeight || 40
+  const pageHead = 64
+  const pagePadding = window.innerWidth < 768 ? 42 : 52
+  const reserve = toolbarH + pagerH + pageHead + pagePadding
+  tableHeight.value = Math.max(250, viewport - reserve)
 }
 
 function loadList() {
@@ -121,6 +134,7 @@ function loadList() {
     total.value = data.total || 0
   }).finally(() => {
     loading.value = false
+    nextTick(() => updateTableHeight())
   })
 }
 
@@ -139,7 +153,7 @@ function openDetail(row) {
 }
 
 onMounted(() => {
-  updateTableHeight()
+  nextTick(() => updateTableHeight())
   window.addEventListener('resize', updateTableHeight)
   loadList()
 })
@@ -155,27 +169,49 @@ onBeforeUnmount(() => {
   min-height: calc(100dvh - 140px);
   display: flex;
   flex-direction: column;
+  gap: 10px;
+}
+
+.page-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .toolbar {
   display: flex;
   gap: 10px;
-  margin-bottom: 12px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .id-input {
-  width: 180px;
+  width: 170px;
 }
 
 .keyword-input {
-  min-width: 240px;
+  min-width: 220px;
   flex: 1;
+}
+
+.action-group {
+  display: flex;
+  gap: 8px;
 }
 
 .table-wrap {
   flex: 1;
-  min-height: 260px;
+  min-height: 250px;
 }
 
 .line-clamp {
@@ -187,7 +223,6 @@ onBeforeUnmount(() => {
 .pager {
   display: flex;
   justify-content: flex-end;
-  margin-top: 12px;
   overflow-x: auto;
 }
 
@@ -211,9 +246,14 @@ onBeforeUnmount(() => {
   }
 
   .id-input,
-  .keyword-input {
+  .keyword-input,
+  .action-group {
     width: 100%;
     min-width: 100%;
+  }
+
+  .action-group :deep(.el-button) {
+    flex: 1;
   }
 
   .pager {
