@@ -98,7 +98,9 @@ const en = {
 		"系统设置": "System Settings",
 		"设置查看": "View Settings",
 		"设置修改": "Change Settings",
-		"发件重置": "Reset Send Count"
+		"发件重置": "Reset Send Count",
+		"密码重置": "Reset Password",
+		"事件日志查看": "View Event Logs"
 	}
 };
 

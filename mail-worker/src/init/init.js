@@ -30,6 +30,7 @@ const dbInit = {
 		await this.v2_9DB(c);
 		await this.v3_0DB(c);
 		await this.v3_1DB(c);
+		await this.v3_2DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
 	},
@@ -45,6 +46,24 @@ const dbInit = {
 				meta TEXT,
 				create_time DATETIME DEFAULT CURRENT_TIMESTAMP
 			)`).run();
+		} catch (e) {
+			console.warn(`跳过字段：${e.message}`);
+		}
+	},
+
+
+	async v3_2DB(c) {
+		try {
+			await c.env.db.batch([
+				c.env.db.prepare(`INSERT OR IGNORE INTO perm (perm_id, name, perm_key, pid, type, sort) VALUES (37, '密码重置', 'my:reset-pwd', 4, 2, 1)`),
+				c.env.db.prepare(`INSERT OR IGNORE INTO perm (perm_id, name, perm_key, pid, type, sort) VALUES (38, '事件日志查看', 'setting:event-log:query', 17, 2, 2)`),
+				c.env.db.prepare(`INSERT OR IGNORE INTO role_perm (role_id, perm_id)
+					SELECT role_id, 37 FROM role WHERE role_id = 1
+					AND NOT EXISTS (SELECT 1 FROM role_perm WHERE role_id = 1 AND perm_id = 37)`),
+				c.env.db.prepare(`INSERT OR IGNORE INTO role_perm (role_id, perm_id)
+					SELECT role_id, 38 FROM role WHERE role_id = 1
+					AND NOT EXISTS (SELECT 1 FROM role_perm WHERE role_id = 1 AND perm_id = 38)`)
+			]);
 		} catch (e) {
 			console.warn(`跳过字段：${e.message}`);
 		}

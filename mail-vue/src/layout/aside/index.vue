@@ -31,7 +31,7 @@
           <Icon icon="fluent:settings-48-regular" width="20" height="20" />
           <span class="menu-name" style="margin-left: 21px">{{$t('settings')}}</span>
         </el-menu-item>
-        <div class="manage-title" v-perm="['all-email:query','user:query','role:query','setting:query','analysis:query','reg-key:query']">
+        <div class="manage-title" v-perm="['all-email:query','user:query','role:query','setting:query','setting:event-log:query','analysis:query','reg-key:query']">
           <div>{{$t('manage')}}</div>
         </div>
         <el-menu-item @click="router.push({name: 'analysis'})" index="analysis" v-perm="'analysis:query'"
@@ -65,7 +65,7 @@
           <span class="menu-name" style="margin-left: 22px">{{$t('SystemSettings')}}</span>
         </el-menu-item>
 
-        <el-menu-item @click="router.push({name: 'webhook-event'})" index="webhook-event" v-perm="'setting:query'"
+        <el-menu-item @click="router.push({name: 'webhook-event'})" index="webhook-event" v-perm="'setting:event-log:query'"
                       :class="route.meta.name === 'webhook-event' ? 'choose-item' : ''">
           <Icon icon="hugeicons:ai-security-01" width="20" height="20" />
           <span class="menu-name" style="margin-left: 21px">{{$t('eventLogs')}}</span>
