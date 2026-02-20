@@ -176,7 +176,13 @@ onBeforeUnmount(() => {
 <style scoped>
 .event-page {
   padding: 10px;
-  height: calc(100dvh - 140px);
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -230,6 +236,7 @@ onBeforeUnmount(() => {
 .table-wrap {
   flex: 1;
   min-height: 220px;
+  min-width: 0;
   overflow: hidden;
   border: 1px solid var(--el-border-color-light);
   border-radius: 8px;
@@ -237,6 +244,11 @@ onBeforeUnmount(() => {
 
 .table-scroll {
   height: 100%;
+  width: 100%;
+}
+
+.table-scroll :deep(.el-scrollbar__wrap) {
+  overflow: auto;
 }
 
 .line-clamp {
@@ -267,7 +279,6 @@ onBeforeUnmount(() => {
 
 @media (max-width: 767px) {
   .event-page {
-    height: calc(100dvh - 112px);
     padding: 8px;
   }
 
