@@ -55,7 +55,7 @@
             <div class="item-title">{{ $t('bcc') || 'Bcc' }}</div>
           </template>
         </el-input-tag>
-        <el-input v-model="form.subject" :placeholder="t('subject')" @blur="onSubjectBlur" />
+        <el-input v-model="form.subject" :placeholder="t('subject')" />
         <tinyEditor :def-value="defValue" ref="editor" @change="change" @focus="focusChange" />
         <div class="button-item">
           <div class="att-add" @click="chooseFile">
@@ -326,7 +326,9 @@ async function sendEmail() {
     return
   }
 
-  form.content = editor.value.getContent();
+  if (!form.content) {
+    form.content = editor.value.getContent();
+  }
 
   if (!form.content) {
     ElMessage({
@@ -455,12 +457,6 @@ function change(content, text) {
 
 function focusChange() {
   if (selectStatus) openSelect()
-}
-
-function onSubjectBlur() {
-  if (form.draftId && form.subject) {
-    draftStore.setDraft = {...toRaw(form)}
-  }
 }
 
 function openForward(email) {
@@ -695,11 +691,6 @@ function close() {
         align-items: center;
         display: grid;
         grid-template-columns: auto auto auto 1fr;
-        @media (max-width: 768px) {
-          grid-template-columns: auto 1fr;
-          grid-template-rows: auto auto;
-          gap: 4px 8px;
-        }
       }
 
       .title-text {
@@ -720,11 +711,6 @@ function close() {
         white-space: nowrap;
         text-overflow: ellipsis;
         overflow: hidden;
-        @media (max-width: 768px) {
-          margin-left: 0;
-          white-space: normal;
-          overflow: visible;
-        }
       }
 
 
@@ -832,10 +818,6 @@ function close() {
     border-color: var(--el-color-primary-light-7);
     background: var(--el-color-primary-light-9);
   }
-  @media (max-width: 600px) {
-    padding: 4px 10px;
-    font-size: 14px;
-  }
 }
 
 .write-select {
@@ -851,26 +833,7 @@ function close() {
   padding-right: 4px;
 }
 
-:deep(.el-input-tag) {
-  @media (max-width: 600px) {
-    .el-input__wrapper {
-      flex-wrap: wrap;
-      padding-bottom: 4px;
-    }
-    .el-input-tag__input-wrapper {
-      width: 100%;
-      min-width: 0;
-    }
-  }
-}
-
 .icon {
   cursor: pointer;
-}
-
-@media (max-width: 600px) {
-  .container {
-    gap: 10px !important;
-  }
 }
 </style>
