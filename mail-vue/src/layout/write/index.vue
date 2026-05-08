@@ -15,7 +15,7 @@
         </div>
       </div>
       <div class="container">
-        <el-input-tag class="recipient-section" @add-tag="addTagChange($event, 'receiveEmail')" tag-type="primary" @input="inputChange" size="default" v-model="form.receiveEmail" >
+        <el-input-tag  @add-tag="addTagChange($event, 'receiveEmail')" tag-type="primary" @input="inputChange" size="default" v-model="form.receiveEmail" >
           <template #prefix>
             <div class="item-title" >{{ $t('recipient') }}</div>
             <el-select
@@ -38,19 +38,19 @@
             </el-select>
           </template>
           <template #suffix>
-            <div class="cc-bcc-buttons">
+            <div style="display: flex;margin-right: 3px; align-items: center; gap: 8px;">
               <span class="cc-bcc-btn" @click="showCC = !showCC" :class="{active: showCC}">Cc</span>
               <span class="cc-bcc-btn" @click="showBCC = !showBCC" :class="{active: showBCC}">Bcc</span>
               <Icon icon="fa7-solid:user-plus" width="20" height="20" class="add-contact" @click.stop="openContacts" />
             </div>
           </template>
         </el-input-tag>
-        <el-input-tag v-if="showCC" class="cc-bcc-section" @add-tag="addTagChange($event, 'cc')" tag-type="primary" size="default" v-model="form.cc">
+        <el-input-tag v-if="showCC" @add-tag="addTagChange($event, 'cc')" tag-type="primary" size="default" v-model="form.cc">
           <template #prefix>
             <div class="item-title">{{ $t('cc') || 'Cc' }}</div>
           </template>
         </el-input-tag>
-        <el-input-tag v-if="showBCC" class="cc-bcc-section" @add-tag="addTagChange($event, 'bcc')" tag-type="primary" size="default" v-model="form.bcc">
+        <el-input-tag v-if="showBCC" @add-tag="addTagChange($event, 'bcc')" tag-type="primary" size="default" v-model="form.bcc">
           <template #prefix>
             <div class="item-title">{{ $t('bcc') || 'Bcc' }}</div>
           </template>
@@ -457,19 +457,9 @@ function focusChange() {
   if (selectStatus) openSelect()
 }
 
-async function onSubjectBlur() {
-  if (form.subject && (form.receiveEmail.length > 0 || form.cc.length > 0 || form.bcc.length > 0 || form.content)) {
-    if (form.draftId) {
-      draftStore.setDraft = {...toRaw(form)}
-    } else {
-      const formData = {...toRaw(form)};
-      delete formData.draftId
-      delete formData.attachments
-      formData.createTime = dayjs().utc().format('YYYY-MM-DD HH:mm:ss');
-      form.draftId = await db.value.draft.add({...formData})
-      db.value.att.add({draftId: form.draftId, attachments: toRaw(form.attachments)})
-      draftStore.refreshList++
-    }
+function onSubjectBlur() {
+  if (form.draftId && form.subject) {
+    draftStore.setDraft = {...toRaw(form)}
   }
 }
 
@@ -826,17 +816,6 @@ function close() {
   cursor: pointer;
 }
 
-.cc-bcc-buttons {
-  display: flex;
-  margin-right: 3px;
-  align-items: center;
-  gap: 8px;
-  @media (max-width: 450px) {
-    gap: 6px;
-    margin-right: 2px;
-  }
-}
-
 .cc-bcc-btn {
   font-size: 13px;
   color: var(--el-text-color-secondary);
@@ -856,10 +835,6 @@ function close() {
   @media (max-width: 600px) {
     padding: 4px 10px;
     font-size: 14px;
-  }
-  @media (max-width: 450px) {
-    padding: 4px 8px;
-    font-size: 13px;
   }
 }
 
@@ -886,34 +861,6 @@ function close() {
       width: 100%;
       min-width: 0;
     }
-  }
-}
-
-.recipient-section {
-  @media (max-width: 450px) {
-    .el-input-tag__input-wrapper {
-      min-width: 100px;
-    }
-  }
-}
-
-.cc-bcc-section {
-  @media (max-width: 450px) {
-    display: flex;
-    flex-direction: column;
-    
-    .item-title {
-      min-width: 40px;
-      flex-shrink: 0;
-    }
-  }
-}
-
-:deep(.el-input-tag--with-prefix .el-input__prefix) {
-  @media (max-width: 450px) {
-    flex-wrap: wrap;
-    min-width: 50px;
-    max-width: 60px;
   }
 }
 
