@@ -337,7 +337,23 @@ const en = {
     searchUser: 'Search by user',
     searchEmail: 'Search by Email',
     searchSender: 'Search by Sender',
-    userEmail: 'Email Address'
+    userEmail: 'Email Address',
+    mailMerge: 'Mail Merge',
+    back: 'Back',
+    template: 'Template',
+    recipients: 'Recipients',
+    recipientPreview: 'Recipient Preview',
+    noRecipientsTip: 'Please upload recipients to see preview',
+    sendMerge: 'Send Merge',
+    subjectPlaceholder: 'Hello {{name}}',
+    csvPlaceholder: 'email,name,order\nuser@example.com,John,12345',
+    csvUploadTip: 'CSV should have a header row. Use {{column_name}} in subject or body.',
+    uploadCSV: 'Upload CSV',
+    confirmSendMerge: 'Are you sure you want to send personalized emails to {count} recipients?',
+    partiallyFailed: 'Partially failed',
+    failureDetails: 'Failure Details',
+    close: 'Close',
+    missingParams: 'Missing required parameters',
 }
 
 export default en

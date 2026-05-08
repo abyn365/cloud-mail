@@ -59,6 +59,16 @@ const routers = {
             }
         }
     ],
+    'email:merge': [{
+        path: '/merge',
+        name: 'merge',
+        component: () => import('@/views/merge/index.vue'),
+        meta: {
+            title: 'mailMerge',
+            name: 'merge',
+            menu: true
+        }
+    }],
     'user:query': [{
         path: '/all-users',
         name: 'user',
