@@ -2506,7 +2506,7 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 		const pageArg = Number(args?.[0] || 1);
 		switch (command) {
 			case '/start':
-				return { text: await this.formatStatusCommand(c), replyMarkup: this.buildMainMenu() };
+				return { text: await this.formatStatusCommand(c), replyMarkup: this.buildMainMenu(), recognized: true };
 			case '/help':
 				return {
 					text: `🤖 <b>Mail Bot — Help</b>
@@ -2548,89 +2548,91 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 • <code>/admin user ban 5</code> / <code>/admin user unban 5</code>
 • <code>/admin user role 5 2</code>
 • <code>/admin invite create CODE 1 10</code>`,
-					replyMarkup: this.buildMainMenu()
+					replyMarkup: this.buildMainMenu(),
+						recognized: true
 				};
 			case '/recent': {
 				const result = await this.formatRecentCommand(c);
-				return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:recent') };
+				return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:recent'), recognized: true };
 			}
 			case '/resetquota':
-				return await this.formatResetQuotaCommand(c, args?.[0]);
+				return { ...(await this.formatResetQuotaCommand(c, args?.[0])), recognized: true };
 			case '/usermail':
-				return await this.formatUserMailCommand(c, args?.[0], args?.[1] || 1);
+				return { ...(await this.formatUserMailCommand(c, args?.[0], args?.[1] || 1)), recognized: true };
 			case '/mail':
-				if (args?.[0] === 'page') return await this.formatMailCommand(c, Number(args?.[1] || 1));
-				if (/^\d+$/.test(String(args?.[0] || '')) && Number(args[0]) > 0 && Number(args[0]) <= 50) return await this.formatMailCommand(c, Number(args[0]));
-				if (args?.[0]) return await this.formatMailDetailCommand(c, args[0], args?.[1]);
-				return await this.formatMailCommand(c, pageArg);
+				if (args?.[0] === 'page') return { ...(await this.formatMailCommand(c, Number(args?.[1] || 1))), recognized: true };
+				if (/^\d+$/.test(String(args?.[0] || '')) && Number(args[0]) > 0 && Number(args[0]) <= 50) return { ...(await this.formatMailCommand(c, Number(args[0]))), recognized: true };
+				if (args?.[0]) return { ...(await this.formatMailDetailCommand(c, args[0], args?.[1])), recognized: true };
+				return { ...(await this.formatMailCommand(c, pageArg)), recognized: true };
 			case '/users':
-				if (args?.[0] === 'detail') return await this.formatUserDetailCommand(c, args?.[1], args?.[2]);
-				return await this.formatAdminCommand(c, ['user', 'list', String(pageArg)]);
+				if (args?.[0] === 'detail') return { ...(await this.formatUserDetailCommand(c, args?.[1], args?.[2])), recognized: true };
+				return { ...(await this.formatAdminCommand(c, ['user', 'list', String(pageArg)])), recognized: true };
 			case '/user':
-				return await this.formatUserDetailCommand(c, args?.[0], args?.[1]);
+				return { ...(await this.formatUserDetailCommand(c, args?.[0], args?.[1])), recognized: true };
 			case '/role':
-				return await this.formatAdminCommand(c, ['role', 'list']);
+				return { text: await this.formatAdminCommand(c, ['role', 'list']).then(r => r.text), replyMarkup: this.buildAdminMenu(), recognized: true };
 			case '/invite':
-				if (args?.[0] === 'detail') return await this.formatInviteDetailCommand(c, args?.[1], args?.[2]);
-				if (args?.[0] && /^\d+$/.test(String(args[0])) && Number(args[0]) > 50) return await this.formatInviteDetailCommand(c, args[0], 1);
-				return await this.formatAdminCommand(c, ['invite', 'list', String(pageArg)]);
+				if (args?.[0] === 'detail') return { ...(await this.formatInviteDetailCommand(c, args?.[1], args?.[2])), recognized: true };
+				if (args?.[0] && /^\d+$/.test(String(args[0])) && Number(args[0]) > 50) return { ...(await this.formatInviteDetailCommand(c, args[0], 1)), recognized: true };
+				return { ...(await this.formatAdminCommand(c, ['invite', 'list', String(pageArg)])), recognized: true };
 			case '/admin':
-				return await this.formatAdminCommand(c, args || []);
+				return { ...(await this.formatAdminCommand(c, args || [])), recognized: true };
 			case '/status':
-				return { text: await this.formatStatusCommand(c), replyMarkup: this.appendRefreshButton(this.buildMainMenu(), 'cmd:refresh:status') };
+				return { text: await this.formatStatusCommand(c), replyMarkup: this.appendRefreshButton(this.buildMainMenu(), 'cmd:refresh:status'), recognized: true };
 			case '/chatid':
-				return { text: `🆔 chat_id: <code>${chatId}</code>\n👤 user_id: <code>${userId || '-'}</code>`, replyMarkup: this.buildMainMenu() };
+				return { text: `🆔 chat_id: <code>${chatId}</code>\n👤 user_id: <code>${userId || '-'}</code>`, replyMarkup: this.buildMainMenu(), recognized: true };
 			case '/system':
-				return { text: await this.formatSystemCommand(c), replyMarkup: this.appendRefreshButton(this.buildMainMenu(), 'cmd:refresh:system') };
+				return { text: await this.formatSystemCommand(c), replyMarkup: this.appendRefreshButton(this.buildMainMenu(), 'cmd:refresh:system'), recognized: true };
 			case '/security':
-				if (args?.[0] === 'event') return await this.formatSecurityEventDetailCommand(c, args?.[1]);
+				if (args?.[0] === 'event') return { ...(await this.formatSecurityEventDetailCommand(c, args?.[1])), recognized: true };
 				if (args?.[0] === 'blacklist') {
 					const result = await this.formatSecurityBlacklistCommand(c, args?.[1], args?.[2]);
-					return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:security:blacklist') };
+					return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:security:blacklist'), recognized: true };
 				}
 				if (args?.[0] === 'keyword') {
 					const result = await this.formatSecurityKeywordCommand(c, args?.[1], args?.[2]);
-					return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:security:keyword') };
+					return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:security:keyword'), recognized: true };
 				}
 				{
 					const result = await this.formatSecurityCommand(c);
-					return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:security') };
+					return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, 'cmd:refresh:security'), recognized: true };
 				}
 			case '/whois':
 				// /whois is removed — redirect to search ip
-				if (args?.[0]) return await this.formatWhoisCommand(c, args[0]);
+				if (args?.[0]) return { ...(await this.formatWhoisCommand(c, args[0])), recognized: true };
 				return {
 					text: `🌐 <b>IP Lookup</b>\nUse: <code>/search ip &lt;ip&gt;</code>\nExample: <code>/search ip 1.1.1.1</code>`,
-					replyMarkup: this.buildSearchMenu()
+					replyMarkup: this.buildSearchMenu(),
+						recognized: true
 				};
 			case '/stats':
-				return await this.formatStatsCommand(c, args?.[0] || '7d');
+				return { ...(await this.formatStatsCommand(c, args?.[0] || '7d')), recognized: true };
 			case '/events': {
-				if (args?.[0] && args?.[0] !== 'page') return await this.formatEventDetailCommand(c, args[0]);
+				if (args?.[0] && args?.[0] !== 'page') return { ...(await this.formatEventDetailCommand(c, args[0])), recognized: true };
 				const currentPage = Math.max(1, Number(args?.[0] === 'page' ? args?.[1] : pageArg));
 				const result = await this.formatEventsCommand(c, currentPage);
-				return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, `cmd:refresh:events:${currentPage}`) };
+				return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, `cmd:refresh:events:${currentPage}`) , recognized: true };
 			}
 			case '/event':
-				if (args?.[0] === 'user') return await this.formatEventDetailCommand(c, args?.[1], { backText: '👤 User Detail', backCallbackData: `cmd:userid:${args?.[2] || 1}:${args?.[3] || 1}` });
-				return await this.formatEventDetailCommand(c, args?.[0], { backPage: args?.[1] });
+				if (args?.[0] === 'user') return { ...(await this.formatEventDetailCommand(c, args?.[1], { backText: '👤 User Detail', backCallbackData: `cmd:userid:${args?.[2] || 1}:${args?.[3] || 1}` )), recognized: true };
+				return { ...(await this.formatEventDetailCommand(c, args?.[0], { backPage: args?.[1] })), recognized: true };
 			case '/search':
 			case '/searchs':
-				if (!args?.[0]) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu() };
+				if (!args?.[0]) return { text: this.formatSearchHelp('general'), replyMarkup: this.buildSearchMenu(), recognized: true };
 				if (['user','email','invite','role','event','keyword','kw','ip'].includes(args[0]) && !args[1]) {
-					return { text: this.formatSearchHelp(args[0]), replyMarkup: this.buildSearchMenu() };
+					return { text: this.formatSearchHelp(args[0]), replyMarkup: this.buildSearchMenu(), recognized: true };
 				}
 				{
 					const result = await this.formatSearchCommand(c, args?.[0], args?.slice(1));
 					const searchType = String(args?.[0] || '').toLowerCase();
 					if (searchType === 'event' && args?.[1]) {
-						return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, `cmd:refresh:search:event:${Number(args[1]) || 0}`) };
+						return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, `cmd:refresh:search:event:${Number(args[1]) || 0}`) , recognized: true };
 					}
-					return result;
+					return { ...result, recognized: true };
 				}
 			default:
-				return await this.resolveCommand(c, '/help', [], chatId, userId);
-		}
+const helpResult = await this.resolveCommand(c, '/help', [], chatId, userId);
+return { ...helpResult, recognized: false };
 	},
 
 	// ─── WEBHOOK HANDLER ──────────────────────────────────────────────────────
@@ -2771,38 +2773,77 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 		}
 
 		const message = body?.message || body?.edited_message || body?.channel_post;
-		const text = message?.text?.trim();
-		const chatId = message?.chat?.id;
-		const userId = message?.from?.id;
-		const userMessageId = message?.message_id;
-		if (!text || !chatId) return;
+                const text = message?.text?.trim();
+                const chatId = message?.chat?.id;
+                const userId = message?.from?.id;
+                const userMessageId = message?.message_id;
+                const chatType = message?.chat?.type;
+                if (!text || !chatId) return;
 
-		if (!await this.isAllowedChat(c, chatId, userId)) {
-			const allowed = await this.parseAllowedChatIds(c);
-			const msg = allowed.length === 0
-				? '⛔ Unauthorized\nReason: CHAT_ID allowlist is empty.'
-				: `⛔ Unauthorized\nAllowed: ${allowed.join(', ')}\nCurrent chat_id: ${chatId}${userId ? `\nCurrent user_id: ${userId}` : ''}`;
-			await this.sendTelegramReply(c, chatId, msg);
-			await this.logSystemEvent(c, 'telegram.command.unauthorized', EVENT_LEVEL.WARN, 'Unauthorized command attempt', { chatId, userId, text });
-			return;
-		}
+                const isPrivate = chatType === 'private';
+                const isCommand = text.startsWith('/');
 
-		const argParts = text.split(/\s+/).filter(Boolean);
-		const rawCommand = argParts.shift();
-		const command = rawCommand.includes('@') ? rawCommand.split('@')[0] : rawCommand;
-		console.log(`Telegram bot command: chat_id=${chatId} user_id=${userId || '-'} command=${command}`);
-		await this.logSystemEvent(c, 'telegram.command.received', EVENT_LEVEL.INFO, command, { chatId, userId, args: argParts });
+                // In groups/channels, only respond to commands (messages starting with /)
+                // In private chats, respond to all text messages
+                if (!isPrivate && !isCommand) return;
 
-		const result = await this.resolveCommand(c, command, argParts, chatId, userId);
-		let reply = result.text;
-		if (reply.length > 3800) reply = `${reply.slice(0, 3800)}\n\n...truncated`;
+                if (!await this.isAllowedChat(c, chatId, userId)) {
+                        const allowed = await this.parseAllowedChatIds(c);
+                        // Only send unauthorized message for private chats; for groups, silently ignore
+                        if (isPrivate) {
+                                const msg = allowed.length === 0
+                                        ? '⛔ Unauthorized\nReason: CHAT_ID allowlist is empty.'
+                                        : `⛔ Unauthorized\nAllowed: ${allowed.join(', ')}\nCurrent chat_id: ${chatId}${userId ? `\nCurrent user_id: ${userId}` : ''}`;
+                                await this.sendTelegramReply(c, chatId, msg);
+                                await this.logSystemEvent(c, 'telegram.command.unauthorized', EVENT_LEVEL.WARN, 'Unauthorized command attempt', { chatId, userId, text });
+                        }
+                        return;
+                }
 
-		await this.sendFreshCommandReply(c, chatId, reply, result.replyMarkup);
+                const argParts = text.split(/\s+/).filter(Boolean);
+                const rawCommand = argParts.shift();
+                const command = rawCommand.includes('@') ? rawCommand.split('@')[0] : rawCommand;
 
-		if (userMessageId && message?.from?.id) {
-			await this.deleteTelegramMessage(c, chatId, userMessageId);
-		}
-	},
+                // Check if this command is for a specific bot via @username
+                let isExplicitlyForThisBot = false;
+                let isExplicitlyForOtherBot = false;
+                if (rawCommand.includes('@')) {
+                        const parts = rawCommand.split('@');
+                        const botNameInCommand = parts[1]?.toLowerCase();
+                        const thisBotName = (c.env.BOT_NAME || c.env.TG_BOT_NAME || '').toLowerCase();
+                        if (thisBotName && botNameInCommand === thisBotName) {
+                                isExplicitlyForThisBot = true;
+                        } else if (botNameInCommand) {
+                                isExplicitlyForOtherBot = true;
+                        }
+                }
+
+                // If command targets another bot, ignore it silently
+                if (isExplicitlyForOtherBot) return;
+
+                // For groups/channels: only respond if explicitly addressed to this bot (via @BotName)
+                // Generic commands (without @) in groups/channels are ignored to avoid intrusive behavior
+                if (!isPrivate && !isExplicitlyForThisBot) return;
+
+                console.log(`Telegram bot command: chat_id=${chatId} user_id=${userId || '-'} command=${command}`);
+                await this.logSystemEvent(c, 'telegram.command.received', EVENT_LEVEL.INFO, command, { chatId, userId, args: argParts });
+
+                const result = await this.resolveCommand(c, command, argParts, chatId, userId);
+
+                // In groups/channels: only respond if the command was recognized
+                // This prevents sending "Help" messages for unrecognized commands in groups
+                if (!isPrivate && !result.recognized) return;
+
+                let reply = result.text;
+                if (reply.length > 3800) reply = `${reply.slice(0, 3800)}\n\n...truncated`;
+
+                await this.sendFreshCommandReply(c, chatId, reply, result.replyMarkup);
+
+                // Only delete the user's command message in private chats
+                if (isPrivate && userMessageId && message?.from?.id) {
+                        await this.deleteTelegramMessage(c, chatId, userMessageId);
+                }
+                }
 
 	// ─── SECURITY ALERT ──────────────────────────────────────────────────────
 
