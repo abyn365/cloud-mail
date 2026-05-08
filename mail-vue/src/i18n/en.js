@@ -354,6 +354,8 @@ const en = {
     failureDetails: 'Failure Details',
     close: 'Close',
     missingParams: 'Missing required parameters',
+    cc: 'Cc',
+    bcc: 'Bcc',
 }
 
 export default en

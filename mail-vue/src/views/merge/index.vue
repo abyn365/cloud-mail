@@ -30,10 +30,24 @@
           </el-col>
           <el-col :span="12">
             <el-form-item :label="$t('subject')">
-              <el-input v-model="form.subject" :placeholder="$t('subjectPlaceholder')" />
+              <el-input v-model="form.subject" :placeholder="$t('subjectPlaceholder')">
+                <template #suffix>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="cc-bcc-btn" @click="showCC = !showCC" :class="{active: showCC}">Cc</span>
+                    <span class="cc-bcc-btn" @click="showBCC = !showBCC" :class="{active: showBCC}">Bcc</span>
+                  </div>
+                </template>
+              </el-input>
             </el-form-item>
           </el-col>
         </el-row>
+
+        <el-form-item v-if="showCC" :label="$t('cc') || 'Cc'">
+          <el-input-tag v-model="form.cc" tag-type="primary" style="width: 100%" @add-tag="addTagChange($event, 'cc')" />
+        </el-form-item>
+        <el-form-item v-if="showBCC" :label="$t('bcc') || 'Bcc'">
+          <el-input-tag v-model="form.bcc" tag-type="primary" style="width: 100%" @add-tag="addTagChange($event, 'bcc')" />
+        </el-form-item>
         
         <el-tabs v-model="activeTab" class="merge-tabs">
           <el-tab-pane :label="$t('template')" name="template">
@@ -173,6 +187,7 @@ import tinyEditor from '@/components/tiny-editor/index.vue'
 import mergeRequest from '@/request/merge'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Icon } from '@iconify/vue'
+import { isEmail } from '@/utils/verify-utils.js'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -183,8 +198,12 @@ const form = reactive({
   accountId: null,
   subject: '',
   content: '',
-  csvData: ''
+  csvData: '',
+  cc: [],
+  bcc: []
 })
+const showCC = ref(false)
+const showBCC = ref(false)
 const defValue = ref('')
 const editorRef = ref(null)
 const sending = ref(false)
@@ -210,6 +229,18 @@ function goBack() {
 
 function onEditorChange(content) {
   form.content = content
+}
+
+function addTagChange(val, field) {
+  const emails = Array.from(new Set(
+      val.split(/[,，]/).map(item => item.trim()).filter(item => item)
+  ));
+  form[field].splice(form[field].length - 1, 1)
+  emails.forEach(email => {
+    if (isEmail(email) && !form[field].includes(email)) {
+      form[field].push(email)
+    }
+  })
 }
 
 function handleFileChange(file) {
@@ -404,6 +435,23 @@ async function sendMerge() {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
+}
+.cc-bcc-btn {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  &:hover {
+    background: var(--el-fill-color-light);
+  }
+  &.active {
+    color: var(--el-color-primary);
+    border-color: var(--el-color-primary-light-7);
+    background: var(--el-color-primary-light-9);
+  }
 }
 .merge-content {
   background: var(--el-bg-color-overlay);

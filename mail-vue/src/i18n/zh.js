@@ -354,5 +354,7 @@ const zh = {
     failureDetails: '错误详情',
     close: '关闭',
     missingParams: '缺少必要参数',
+    cc: '抄送',
+    bcc: '密送',
 }
 export default zh

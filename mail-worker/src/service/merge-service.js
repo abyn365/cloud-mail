@@ -64,7 +64,7 @@ const mergeService = {
     },
 
     async sendMerge(c, params, userId) {
-        const { accountId, subject, content, csvData, attachments } = params;
+        const { accountId, subject, content, csvData, attachments, cc, bcc } = params;
 
         if (!accountId || !subject || !content || !csvData) {
             throw new BizError(t('missingParams'));
@@ -107,6 +107,8 @@ const mergeService = {
                 await emailService.send(c, {
                     accountId,
                     receiveEmail: [emailAddr],
+                    cc,
+                    bcc,
                     subject: personalizedSubject,
                     content: personalizedContent,
                     sendType: 'send',
