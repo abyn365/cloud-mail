@@ -21,11 +21,6 @@
           <Icon icon="ep:document" width="19" height="19" />
           <span class="menu-name" style="margin-left: 22px">{{$t('drafts')}}</span>
         </el-menu-item>
-        <el-menu-item @click="router.push({name: 'merge'})" index="merge" v-perm="'email:merge'"
-                      :class="route.meta.name === 'merge' ? 'choose-item' : ''">
-          <Icon icon="hugeicons:quill-write-01" width="20" height="20" />
-          <span class="menu-name" style="margin-left: 21px">{{$t('mailMerge')}}</span>
-        </el-menu-item>
         <el-menu-item @click="router.push({name: 'star'})" index="star"
                       :class="route.meta.name === 'star' ? 'choose-item' : ''">
           <Icon icon="solar:star-line-duotone" width="20" height="20" />
