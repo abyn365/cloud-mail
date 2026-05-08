@@ -18,6 +18,24 @@
         <el-input-tag class="recipient-section" @add-tag="addTagChange($event, 'receiveEmail')" tag-type="primary" @input="inputChange" size="default" v-model="form.receiveEmail" >
           <template #prefix>
             <div class="item-title" >{{ $t('recipient') }}</div>
+            <el-select
+                ref="mySelect"
+                class="write-select"
+                popper-class="write-select"
+                :show-arrow="false"
+                :no-match-text="' '"
+                :no-data-text="' '"
+                @visible-change="selectStatusChange"
+                @change="selectChange"
+            >
+              <el-option
+                  v-for="item in selectRecipientList"
+                  :key="item"
+                  :label="item"
+                  :value="item"
+                  style="color: #999896;"
+              />
+            </el-select>
           </template>
           <template #suffix>
             <div class="cc-bcc-buttons">
@@ -27,24 +45,6 @@
             </div>
           </template>
         </el-input-tag>
-        <el-select
-            ref="mySelect"
-            class="write-select"
-            popper-class="write-select"
-            :show-arrow="false"
-            :no-match-text="' '"
-            :no-data-text="' '"
-            @visible-change="selectStatusChange"
-            @change="selectChange"
-        >
-          <el-option
-              v-for="item in selectRecipientList"
-              :key="item"
-              :label="item"
-              :value="item"
-              style="color: #999896;"
-          />
-        </el-select>
         <el-input-tag v-if="showCC" class="cc-bcc-section" @add-tag="addTagChange($event, 'cc')" tag-type="primary" size="default" v-model="form.cc">
           <template #prefix>
             <div class="item-title">{{ $t('cc') || 'Cc' }}</div>
@@ -747,8 +747,11 @@ function close() {
     .container {
       height: 100%;
       display: grid;
-      grid-template-rows: auto auto auto auto 1fr auto;
+      grid-template-rows: auto auto 1fr auto;
       gap: 15px;
+
+      .item-title {
+      }
 
       .button-item {
         display: grid;
@@ -862,11 +865,9 @@ function close() {
 
 .write-select {
   position: absolute;
-  width: 0;
-  height: 0;
-  left: 0;
-  top: 0;
-  z-index: -1;
+  width: 300px;
+  left: 60px;
+  z-index: 0;
   opacity: 0;
   pointer-events: none;
 }
@@ -876,54 +877,43 @@ function close() {
 }
 
 :deep(.el-input-tag) {
-  .el-input__wrapper {
-    flex-wrap: wrap;
-    padding-top: 2px;
-    padding-bottom: 2px;
-  }
-  
-  .el-input-tag__tags {
-    flex-wrap: wrap;
-  }
-
   @media (max-width: 600px) {
+    .el-input__wrapper {
+      flex-wrap: wrap;
+      padding-bottom: 4px;
+    }
     .el-input-tag__input-wrapper {
       width: 100%;
-      min-width: 100px;
-      margin-left: 0;
+      min-width: 0;
     }
-  }
-}
-
-.item-title {
-  color: var(--el-text-color-secondary);
-  font-size: 14px;
-  padding-right: 8px;
-  white-space: nowrap;
-  
-  @media (max-width: 450px) {
-    font-size: 13px;
-    padding-right: 4px;
   }
 }
 
 .recipient-section {
   @media (max-width: 450px) {
     .el-input-tag__input-wrapper {
-      min-width: 80px;
+      min-width: 100px;
     }
   }
 }
 
 .cc-bcc-section {
-  // Ensure it takes full width and flows correctly
+  @media (max-width: 450px) {
+    display: flex;
+    flex-direction: column;
+    
+    .item-title {
+      min-width: 40px;
+      flex-shrink: 0;
+    }
+  }
 }
 
 :deep(.el-input-tag--with-prefix .el-input__prefix) {
   @media (max-width: 450px) {
-    // Remove the restrictive max-width
-    max-width: none; 
-    min-width: auto;
+    flex-wrap: wrap;
+    min-width: 50px;
+    max-width: 60px;
   }
 }
 
