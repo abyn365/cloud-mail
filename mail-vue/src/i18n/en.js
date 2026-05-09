@@ -337,7 +337,14 @@ const en = {
     searchUser: 'Search by user',
     searchEmail: 'Search by Email',
     searchSender: 'Search by Sender',
-    userEmail: 'Email Address'
+    userEmail: 'Email Address',
+    tgBotName: 'Bot Name',
+    setupWebhook: 'Setup Webhook',
+    deleteWebhook: 'Delete Webhook',
+    webhookSetSuccess: 'Webhook setup successful',
+    webhookSetFailed: 'Webhook setup failed',
+    webhookDelSuccess: 'Webhook deleted successfully',
+    webhookDelFailed: 'Webhook deletion failed'
 }
 
 export default en

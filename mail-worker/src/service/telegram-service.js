@@ -2629,12 +2629,11 @@ At: ${dayjs.utc().format('YYYY-MM-DD HH:mm:ss')} UTC`;
 						return { ...result, replyMarkup: this.appendRefreshButton(result.replyMarkup, `cmd:refresh:search:event:${Number(args[1]) || 0}`) , recognized: true };
 					}
 					return { ...result, recognized: true };
-				}
-			default:
-const helpResult = await this.resolveCommand(c, '/help', [], chatId, userId);
-return { ...helpResult, recognized: false };
-	},
-
+					default: {
+							const helpResult = await this.resolveCommand(c, '/help', [], chatId, userId);
+							return { ...helpResult, recognized: false };
+							}
+				},
 	// ─── WEBHOOK HANDLER ──────────────────────────────────────────────────────
 
 	async handleBotWebhook(c, body) {
@@ -2771,8 +2770,8 @@ return { ...helpResult, recognized: false };
 			await this.sendOrEditSingleChatMessage(c, chatId, result.text, result.replyMarkup);
 			return;
 		}
-
-		const message = body?.message || body?.edited_message || body?.channel_post;
+		else {
+			const message = body?.message || body?.edited_message || body?.channel_post;
                 const text = message?.text?.trim();
                 const chatId = message?.chat?.id;
                 const userId = message?.from?.id;
@@ -2810,7 +2809,7 @@ return { ...helpResult, recognized: false };
                 if (rawCommand.includes('@')) {
                         const parts = rawCommand.split('@');
                         const botNameInCommand = parts[1]?.toLowerCase();
-                        const thisBotName = (c.env.BOT_NAME || c.env.TG_BOT_NAME || '').toLowerCase();
+                        const envBotName = c.env.BOT_NAME || c.env.TG_BOT_NAME || ''; const settings = await settingService.query(c); const thisBotName = (settings.tgBotName || envBotName || '').toLowerCase();
                         if (thisBotName && botNameInCommand === thisBotName) {
                                 isExplicitlyForThisBot = true;
                         } else if (botNameInCommand) {
@@ -2842,6 +2841,7 @@ return { ...helpResult, recognized: false };
                 // Only delete the user's command message in private chats
                 if (isPrivate && userMessageId && message?.from?.id) {
                         await this.deleteTelegramMessage(c, chatId, userMessageId);
+                }
                 }
                 }
 

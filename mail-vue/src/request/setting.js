@@ -19,3 +19,11 @@ export function setBackground(background) {
 export function deleteBackground() {
     return http.delete('/setting/deleteBackground')
 }
+
+export function setupWebhook() {
+    return http.get('/telegram/webhook/setup')
+}
+
+export function deleteWebhook() {
+    return http.get('/telegram/webhook/delete')
+}

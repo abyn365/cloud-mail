@@ -492,9 +492,14 @@
         </template>
         <div class="forward-set-body">
           <el-input :placeholder="$t('tgBotToken')" v-model="tgBotToken"></el-input>
+          <el-input :placeholder="$t('tgBotName')" v-model="tgBotName" style="margin-top: 10px"></el-input>
           <el-input-tag tag-type="warning" :placeholder="$t('toBotTokenDesc')" v-model="tgChatId"
                         @add-tag="addChatTag"></el-input-tag>
           <el-input tag-type="warning" :placeholder="$t('customDomainDesc')" v-model="customDomain" ></el-input>
+          <div class="webhook-buttons">
+            <el-button size="small" type="primary" @click="handleSetupWebhook">{{ $t('setupWebhook') }}</el-button>
+            <el-button size="small" type="danger" @click="handleDeleteWebhook">{{ $t('deleteWebhook') }}</el-button>
+          </div>
           <div class="tg-msg-label">
             <span>{{t('from')}}</span>
             <el-select  v-model="tgMsgFrom" >
@@ -734,7 +739,7 @@
 
 <script setup>
 import {computed, defineOptions, reactive, ref} from "vue";
-import {deleteBackground, setBackground, settingQuery, settingSet} from "@/request/setting.js";
+import {deleteBackground, setBackground, settingQuery, settingSet, setupWebhook, deleteWebhook} from "@/request/setting.js";
 import {useSettingStore} from "@/store/setting.js";
 import {useUiStore} from "@/store/ui.js";
 import {useUserStore} from "@/store/user.js";
@@ -840,6 +845,7 @@ const tgChatId = ref([])
 const customDomain = ref('')
 const tgBotStatus = ref(0)
 const tgBotToken = ref('')
+const tgBotName = ref('')
 const forwardEmail = ref([])
 const forwardStatus = ref(0)
 const emailColumnWidth = ref(0)
@@ -969,6 +975,7 @@ function closedSetBackground() {
 function openTgSetting() {
   tgBotStatus.value = setting.value.tgBotStatus
   tgBotToken.value = setting.value.tgBotToken
+  tgBotName.value = setting.value.tgBotName || ''
   customDomain.value = setting.value.customDomain
   tgMsgFrom.value = setting.value.tgMsgFrom
   tgMsgText.value = setting.value.tgMsgText
@@ -1110,6 +1117,7 @@ function saveS3() {
 function tgBotSave() {
   const form = {
     tgBotToken: tgBotToken.value,
+    tgBotName: tgBotName.value,
     customDomain: customDomain.value,
     tgBotStatus: tgBotStatus.value,
     tgChatId: tgChatId.value + '',
@@ -1118,6 +1126,30 @@ function tgBotSave() {
     tgMsgTo: tgMsgTo.value
   }
   editSetting(form)
+}
+
+function handleSetupWebhook() {
+  setupWebhook().then(res => {
+    if (res.code === 200) {
+      ElMessage({ message: t('webhookSetSuccess'), type: 'success', plain: true });
+    } else {
+      ElMessage({ message: res.description || t('webhookSetFailed'), type: 'error', plain: true });
+    }
+  }).catch(e => {
+    ElMessage({ message: t('webhookSetFailed'), type: 'error', plain: true });
+  });
+}
+
+function handleDeleteWebhook() {
+  deleteWebhook().then(res => {
+    if (res.code === 200) {
+      ElMessage({ message: t('webhookDelSuccess'), type: 'success', plain: true });
+    } else {
+      ElMessage({ message: res.description || t('webhookDelFailed'), type: 'error', plain: true });
+    }
+  }).catch(e => {
+    ElMessage({ message: t('webhookDelFailed'), type: 'error', plain: true });
+  });
 }
 
 function forwardEmailSave() {
@@ -1659,6 +1691,12 @@ function editSetting(settingForm, refreshStatus = true) {
       width: v-bind(tgMsgLabelWidth);
     }
   }
+}
+
+.webhook-buttons {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
 }
 
 .forward {

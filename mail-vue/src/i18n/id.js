@@ -338,7 +338,14 @@ const id = {
     searchUser: 'Cari berdasarkan pengguna',
     searchEmail: 'Cari berdasarkan Email',
     searchSender: 'Cari berdasarkan Pengirim',
-    userEmail: 'Alamat Email'
+    userEmail: 'Alamat Email',
+    tgBotName: 'Nama Bot',
+    setupWebhook: 'Setup Webhook',
+    deleteWebhook: 'Hapus Webhook',
+    webhookSetSuccess: 'Webhook berhasil disetup',
+    webhookSetFailed: 'Setup webhook gagal',
+    webhookDelSuccess: 'Webhook berhasil dihapus',
+    webhookDelFailed: 'Penghapusan webhook gagal'
 }
 
 export default id

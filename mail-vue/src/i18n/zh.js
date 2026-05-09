@@ -337,6 +337,13 @@ const zh = {
     searchUser: '搜索用户',
     searchEmail: '搜索邮箱',
     searchSender: '搜索发件人',
-    userEmail: '用户邮箱'
+    userEmail: '用户邮箱',
+    tgBotName: '机器人名称',
+    setupWebhook: '设置Webhook',
+    deleteWebhook: '删除Webhook',
+    webhookSetSuccess: 'Webhook设置成功',
+    webhookSetFailed: 'Webhook设置失败',
+    webhookDelSuccess: 'Webhook删除成功',
+    webhookDelFailed: 'Webhook删除失败'
 }
 export default zh
