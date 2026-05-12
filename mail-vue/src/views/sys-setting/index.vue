@@ -525,8 +525,12 @@
         </template>
         <div class="forward-set-body">
           <el-input :placeholder="$t('tgBotToken')" v-model="tgBotToken"></el-input>
-          <el-input-tag tag-type="warning" :placeholder="$t('toBotTokenDesc')" v-model="tgChatId"
-                        @add-tag="addChatTag"></el-input-tag>
+          <div class="tg-chat-id-field">
+            <el-input-tag tag-type="warning" :placeholder="$t('toBotTokenDesc')" v-model="tgChatId"
+                          @add-tag="addChatTag"></el-input-tag>
+            <div class="tg-chat-id-help">{{ t('tgChatIdSupportDesc') }}</div>
+            <div class="tg-chat-id-help">{{ t('tgChatIdExampleDesc') }}</div>
+          </div>
           <el-input tag-type="warning" :placeholder="$t('customDomainDesc')" v-model="customDomain" ></el-input>
           <div class="tg-msg-label">
             <span>{{t('from')}}</span>
@@ -935,6 +939,15 @@ const tgMsgFromOption = [{label: t('show'), value: 'show'}, {label: t('hide'), v
 const tgMsgToOption = [{label: t('show'), value: 'show'}, {label: t('hide'), value: 'hide'}]
 const tgMsgTextOption = [{label: t('show'), value: 'show'}, {label: t('hide'), value: 'hide'}]
 const tgMsgLabelWidth = computed(() => locale.value === 'en' ? '120px' : '100px');
+const tgChatIdRegex = /^-?\d+$/
+
+function normalizeChatIds(chatIds = []) {
+  return [...new Set(
+      chatIds
+          .map(id => `${id}`.trim())
+          .filter(id => id && tgChatIdRegex.test(id))
+  )]
+}
 
 getSettings()
 getUpdate()
@@ -1063,7 +1076,7 @@ function openTgSetting() {
   tgChatId.value = []
   if (setting.value.tgChatId) {
     const list = setting.value.tgChatId.split(',')
-    tgChatId.value.push(...list)
+    tgChatId.value.push(...normalizeChatIds(list))
   }
   tgSettingShow.value = true
 }
@@ -1158,11 +1171,8 @@ function addChatTag(val) {
 
   tgChatId.value.splice(tgChatId.value.length - 1, 1)
 
-  chatIds.forEach(id => {
-    if (!isNaN(Number(id))) {
-      tgChatId.value.push(id)
-    }
-  })
+  const mergedChatIds = normalizeChatIds([...tgChatId.value, ...chatIds])
+  tgChatId.value.splice(0, tgChatId.value.length, ...mergedChatIds)
 }
 
 function clearS3() {
@@ -1195,6 +1205,8 @@ function saveS3() {
 }
 
 function tgBotSave() {
+  tgChatId.value = normalizeChatIds(tgChatId.value)
+
   const form = {
     tgBotToken: tgBotToken.value,
     customDomain: customDomain.value,
@@ -1818,6 +1830,18 @@ function editSetting(settingForm, refreshStatus = true) {
 
   > *:nth-child(-n+2) {
     margin-bottom: 15px;
+  }
+
+  .tg-chat-id-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .tg-chat-id-help {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+    line-height: 1.4;
   }
 
   .tg-msg-label {
