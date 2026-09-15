@@ -101,16 +101,11 @@
               </div>
               <div class="setting-item">
                 <div class="title-item"><span>{{ $t('loginDescription') }}</span></div>
-                <div class="description-input">
-                  <el-input type="textarea" :rows="2" :placeholder="$t('loginTitle')"
-                            v-model="setting.loginDescription" @change="saveDescription('loginDescription')"/>
-                </div>
-              </div>
-              <div class="setting-item">
-                <div class="title-item"><span>{{ $t('registerDescription') }}</span></div>
-                <div class="description-input">
-                  <el-input type="textarea" :rows="2" :placeholder="$t('regTitle')"
-                            v-model="setting.registerDescription" @change="saveDescription('registerDescription')"/>
+                <div class="email-title">
+                  <span>{{ setting.loginDescription || $t('loginTitle') }}</span>
+                  <el-button class="opt-button" size="small" type="primary" @click="openDescriptionSettings">
+                    <Icon icon="lsicon:edit-outline" width="16" height="16"/>
+                  </el-button>
                 </div>
               </div>
               <div class="setting-item">
@@ -514,6 +509,20 @@
         <form @submit.prevent>
           <el-input type="text" :placeholder="$t('websiteTitle')" v-model="editTitle" @keyup.enter="saveTitle"/>
           <el-button type="primary" :loading="settingLoading" @click="saveTitle">{{ $t('save') }}</el-button>
+        </form>
+      </el-dialog>
+      <el-dialog v-model="descriptionSettingsShow" :title="$t('descriptionSettings')" width="420"
+                 @closed="resetDescriptionSettings">
+        <form @submit.prevent>
+          <div class="dialog-label">{{ $t('loginDescription') }}</div>
+          <el-input type="textarea" :rows="3" :placeholder="$t('loginTitle')"
+                    v-model="loginDescription"/>
+          <div class="dialog-label">{{ $t('registerDescription') }}</div>
+          <el-input type="textarea" :rows="3" style="margin-top: 15px" :placeholder="$t('regTitle')"
+                    v-model="registerDescription"/>
+          <el-button type="primary" :loading="settingLoading" @click="saveDescription">
+            {{ $t('save') }}
+          </el-button>
         </form>
       </el-dialog>
       <el-dialog v-model="resendTokenFormShow" :title="$t('resendToken')" width="340" @closed="cleanResendTokenForm">
@@ -978,6 +987,7 @@ const localUpShow = ref(false)
 const accountStore = useAccountStore();
 const userStore = useUserStore();
 const editTitleShow = ref(false)
+const descriptionSettingsShow = ref(false)
 const resendTokenFormShow = ref(false)
 const blackFormShow = ref(false)
 const autoCleanShow = ref(false)
@@ -995,6 +1005,8 @@ const settingStore = useSettingStore();
 const uiStore = useUiStore();
 const {settings: setting} = storeToRefs(settingStore);
 const editTitle = ref('')
+const loginDescription = ref('')
+const registerDescription = ref('')
 const settingLoading = ref(false)
 const clearS3Loading = ref(false)
 const r2DomainInput = ref('')
@@ -1719,8 +1731,22 @@ function saveTitle() {
   editSetting({title: editTitle.value})
 }
 
-function saveDescription(key) {
-  editSetting({[key]: setting.value[key]}, false)
+function openDescriptionSettings() {
+  loginDescription.value = setting.value.loginDescription || ''
+  registerDescription.value = setting.value.registerDescription || ''
+  descriptionSettingsShow.value = true
+}
+
+function resetDescriptionSettings() {
+  loginDescription.value = setting.value.loginDescription || ''
+  registerDescription.value = setting.value.registerDescription || ''
+}
+
+function saveDescription() {
+  editSetting({
+    loginDescription: loginDescription.value,
+    registerDescription: registerDescription.value,
+  })
 }
 
 function jump(href) {
@@ -1748,6 +1774,7 @@ function editSetting(settingForm, refreshStatus = true) {
       getSettings()
     }
     editTitleShow.value = false
+    descriptionSettingsShow.value = false
     r2DomainShow.value = false
     resendTokenFormShow.value = false
     turnstileShow.value = false
