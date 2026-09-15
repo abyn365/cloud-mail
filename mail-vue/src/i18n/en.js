@@ -153,6 +153,7 @@ const en = {
     websiteTitle: 'Title',
     loginDescription: 'Sign-in description',
     registerDescription: 'Sign-up description',
+    descriptionSettings: 'Sign-in and sign-up descriptions',
     loginBoxOpacity: 'Login Box Opacity',
     loginBackground: 'Background',
     emailSetting: 'Email',

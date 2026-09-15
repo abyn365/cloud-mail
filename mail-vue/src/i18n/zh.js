@@ -153,6 +153,7 @@ const zh = {
     websiteTitle: '网站标题',
     loginDescription: '登录说明',
     registerDescription: '注册说明',
+    descriptionSettings: '登录和注册说明',
     loginBoxOpacity: '登录透明',
     loginBackground: '登录背景',
     emailSetting: '邮件设置',
