@@ -100,6 +100,20 @@
                 </div>
               </div>
               <div class="setting-item">
+                <div class="title-item"><span>{{ $t('loginDescription') }}</span></div>
+                <div class="description-input">
+                  <el-input type="textarea" :rows="2" :placeholder="$t('loginTitle')"
+                            v-model="setting.loginDescription" @change="saveDescription('loginDescription')"/>
+                </div>
+              </div>
+              <div class="setting-item">
+                <div class="title-item"><span>{{ $t('registerDescription') }}</span></div>
+                <div class="description-input">
+                  <el-input type="textarea" :rows="2" :placeholder="$t('regTitle')"
+                            v-model="setting.registerDescription" @change="saveDescription('registerDescription')"/>
+                </div>
+              </div>
+              <div class="setting-item">
                 <div class="title-item"><span>{{ $t('loginBoxOpacity') }}</span></div>
                 <div>
                   <el-input-number size="small" v-model="loginOpacity" @change="opacityChange" :precision="2"
@@ -1703,6 +1717,10 @@ function changeField(key, value) {
 
 function saveTitle() {
   editSetting({title: editTitle.value})
+}
+
+function saveDescription(key) {
+  editSetting({[key]: setting.value[key]}, false)
 }
 
 function jump(href) {
