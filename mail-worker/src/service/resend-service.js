@@ -1,7 +1,6 @@
 import emailService from './email-service';
 import { emailConst } from '../const/entity-const';
 import BizError from '../error/biz-error';
-import { t } from '../i18n/i18n';
 
 const resendService = {
 
@@ -42,7 +41,7 @@ const resendService = {
 		const emailRow = await emailService.updateEmailStatus(c, params)
 
 		if (!emailRow) {
-			throw new BizError(t('emailStatusUpdateFailed'));
+			throw new BizError('更新邮件状态记录失败');
 		}
 
 	}
